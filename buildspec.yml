@@ -1,0 +1,27 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      # Log in to ECR using your region and account ID.
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin 135808923997.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      # Set the repository URI using your actual account ID and repository name.
+      - REPOSITORY_URI=135808923997.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/shs-streamlit-app
+      # Use the first 7 characters of the CodeBuild resolved source version as the image tag.
+      - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build -t $REPOSITORY_URI:$IMAGE_TAG .
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker image...
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      # Optionally update the "latest" tag (this is useful for convenience, even with immutable tagging on ECR):
+      - docker tag $REPOSITORY_URI:$IMAGE_TAG $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:latest
+artifacts:
+  files: '**/*'
