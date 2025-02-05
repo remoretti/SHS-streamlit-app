@@ -1,0 +1,7 @@
+[
+    {
+      "name": "streamlit-container",
+      "imageUri": "135808923997.dkr.ecr.us-east-1.amazonaws.com/shs-streamlit-app:latest"
+    }
+  ]
+  
