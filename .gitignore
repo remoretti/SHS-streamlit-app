@@ -1,0 +1,29 @@
+data_loaders/__pycache__
+data_loaders/cygnus/__pycache__
+data_loaders/logiquip/__pycache__
+data_loaders/quickbooks/__pycache__
+data_loaders/summit_medical/__pycache__
+master_files/
+Raw Files/
+code_mix/
+Commission Reports/
+
+# Ignore environment variable files
+.env
+
+# Python cache and build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Docker related
+docker-compose.override.yml
+
+# Other IDE or system files
+.vscode/
+.idea/
+.DS_Store

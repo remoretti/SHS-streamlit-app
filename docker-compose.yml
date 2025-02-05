@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    container_name: SHS_streamlit_app
+    ports:
+      - "8501:8501"
+    environment:
+      # Use the local database connection settings
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      # Use host.docker.internal so the container can reach your local DB
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
