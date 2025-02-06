@@ -9,7 +9,7 @@ code_mix/
 Commission Reports/
 
 # Ignore environment variable files
-.env
+#.env
 
 # Python cache and build artifacts
 __pycache__/
