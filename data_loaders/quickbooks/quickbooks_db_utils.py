@@ -205,11 +205,6 @@ SELECT
     c."Product Lines" AS "Product Line",
     c."Amount line" AS "Sales Actual",
     c."Margin" AS "Rev Actual",
-    CASE 
-        WHEN (c.total_revenue_ytd + c."Margin") < c."Commission tier threshold" 
-        THEN CAST((c."Margin" - c."Comm Amount tier 1") AS NUMERIC(15,2))
-        ELSE CAST((c."Margin" - (c."Comm Amount tier 1" + c."Comm tier 2 diff amount")) AS NUMERIC(15,2))
-    END AS "SHS Margin",
     c."Comm Amount tier 1",
     c."Comm tier 2 diff amount",
     t2."Commission tier 2 date",
@@ -219,6 +214,7 @@ LEFT JOIN tier_2_eligibility AS t2
     ON c."Sales Rep Name" = t2."Sales Rep Name"
     AND c."Date YYYY"::INTEGER = t2."Date YYYY"::INTEGER
     AND c."Product Lines" = t2."Product Lines";
+
             """)
             result = conn.execute(query)
             harmonised_df = pd.DataFrame(result.fetchall(), columns=result.keys())
