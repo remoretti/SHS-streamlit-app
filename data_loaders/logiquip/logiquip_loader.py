@@ -2,6 +2,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 import os
+from data_loaders.validation_utils import validate_file_format
 
 # Load environment variables
 load_dotenv()
@@ -34,7 +35,17 @@ def load_master_sales_rep():
         engine.dispose()
 
 def load_excel_file_logiquip(filepath: str) -> pd.DataFrame:
-    df = pd.read_excel(filepath, header=1)
+    # Set option to display all columns
+    pd.set_option('display.max_columns', None)
+    raw_df = pd.read_excel(filepath, header=1)
+    #print(raw_df.head(10))
+    #Run validation on the raw DataFrame
+    is_valid, missing = validate_file_format(raw_df, "Logiquip")
+    if not is_valid:
+        raise ValueError(f"Raw file format invalid. Missing columns: {', '.join(missing)}")
+
+    # Proceed with the cleaning and enrichment using the raw_df
+    df = raw_df.copy()
 
     # Drop rows that are completely empty
     df.dropna(how='all', inplace=True)

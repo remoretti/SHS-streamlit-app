@@ -169,7 +169,7 @@ def update_business_objective_data(df, year):
 def highlight_subtotals_readonly(row):
     """Style rows where 'Sales Rep name' is 'Sub-Total'."""
     if row["Sales Rep name"] == "Sub-Total":
-        return ["color: red; font-weight: bold;" for _ in row]
+        return ["color: blue; font-weight: bold;" for _ in row]
     return [""] * len(row)
 
 
@@ -177,6 +177,9 @@ def remove_subtotals_for_editing(df):
     """Remove Sub-Total rows before making the DataFrame editable."""
     return df[df["Sales Rep name"] != "Sub-Total"].reset_index(drop=True)
 
+
+
+# --------------- Streamlit UI ------------------
 
 st.title("Business Objective Editor")
 
@@ -223,17 +226,16 @@ else:
                 # Show the "read-only" DataFrame with sub-totals highlighted
                 styled_df = df.style.apply(highlight_subtotals_readonly, axis=1)
 
-
                 st.write("Preview with Sub-Totals Highlighted (Read-Only):")
+                # Add the "Edit Data" button
+                if st.button("Edit Data"):
+                    st.session_state.editing = True  # Switch to edit mode
                 st.write(
                     styled_df,
                     unsafe_allow_html=True,  # Allow styling
                     use_container_width=True,
                 )
 
-                # Add the "Edit Data" button
-                if st.button("Edit Data"):
-                    st.session_state.editing = True  # Switch to edit mode
             else:
                 # Show the editable DataFrame with sub-totals removed
                 editable_df = remove_subtotals_for_editing(df)
@@ -262,8 +264,8 @@ else:
                         st.session_state.save_initiated = False  # Reset state after save
                         st.session_state.editing = False  # Return to read-only mode
                         st.rerun()  # Reload the page to show updated data
+                    # --- New: Cancel Editing button ---
+                if st.button("Cancel Editing"):
+                    st.session_state.editing = False  # Cancel edit mode and revert to read-only
         else:
             st.warning(f"No data available for the selected year: {selected_year}.")
-
-
-

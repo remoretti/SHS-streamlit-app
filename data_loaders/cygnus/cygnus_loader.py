@@ -2,6 +2,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 import os
+from data_loaders.validation_utils import validate_file_format
 
 # Load environment variables
 load_dotenv()
@@ -35,7 +36,14 @@ def load_master_sales_rep():
 
 def load_excel_file_cygnus(filepath: str) -> pd.DataFrame:
     # Read the Excel file starting from the correct header row
-    df = pd.read_excel(filepath, header=3)
+    raw_df = pd.read_excel(filepath, header=3)
+    # Run validation on the raw DataFrame
+    is_valid, missing = validate_file_format(raw_df, "Cygnus")
+    if not is_valid:
+        raise ValueError(f"Raw file format invalid. Missing columns: {', '.join(missing)}")
+
+    # Proceed with the cleaning and enrichment using the raw_df
+    df = raw_df.copy()
     
     # Drop rows that are completely empty
     df.dropna(how='all', inplace=True)

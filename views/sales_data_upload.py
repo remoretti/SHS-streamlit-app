@@ -17,10 +17,118 @@ from data_loaders.logiquip.logiquip_db_utils import save_dataframe_to_db as save
 from data_loaders.summit_medical.summit_medical_db_utils import save_dataframe_to_db as save_summit_medical_to_db
 from data_loaders.quickbooks.quickbooks_db_utils import save_dataframe_to_db as save_quickbooks_to_db
 
+# Import validation_utils
+from data_loaders.validation_utils import validate_file_format, EXPECTED_COLUMNS
+
 # Load environment variables
 load_dotenv()
 
 DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+
+# # Serving the function validate_file_format()
+# EXPECTED_COLUMNS = {
+#     # "Cygnus": [ # Don't count index column!
+#     #     "SKU",
+#     #     "Days Past",
+#     #     "Cust. ID",
+#     #     "Cust- Name",
+#     #     "Name",
+#     #     "Address",
+#     #     "City",
+#     #     "State",
+#     #     "Rep %",
+#     #     "Inv Date",
+#     #     "Due Date",
+#     #     "ClosedDate",
+#     #     "ClosedDate YYYY",
+#     #     "ClosedDate MM",
+#     #     "Invoice Total",
+#     #     "Total Rep Due",
+#     #     "Invoice",
+#     #     "Sales Rep",
+#     #     "Sales Rep Name"
+#     # ],
+#     "Cygnus": [
+#         "Sales Rep",
+#         "Cust. ID",
+#         "Cust- Name",
+#         "Name",
+#         "Address",
+#         "City",
+#         "State",
+#         "Invoice",
+#         "SKU",
+#         "Inv Date",
+#         "Due Date",
+#         "ClosedDate",
+#         "Days Past",
+#         "Rep %",
+#         "Invoice Total",
+#         "Total Rep Due"
+#     ],
+#     "Logiquip": [ # Don't count index column!
+#         "Agency",
+#         "Rep",
+#         "Doc Num",
+#         "Customer",
+#         "PO Number",
+#         "Ship To Zip",
+#         "Date Paid",
+#         "Contract",
+#         "Item Class",
+#         "Comm Rate",
+#         "Doc Amt",
+#         "Comm Amt",
+#         "Date Paid YYYY",
+#         "Date Paid MM",
+#         "Sales Rep Name",
+#         "SteppingStone"
+#     ],
+#     "QuickBooks": [ # Don't count index column!
+#         "Product Lines",
+#         "Transaction type",
+#         "Sales Rep Territory",
+#         "Product/Service",
+#         "Num", 
+#         "Sales Rep Name",
+#         "Line order",
+#         "Quantity",
+#         "Customer",
+#         "Purchase description",
+#         "Amount line",
+#         "Service Lines",
+#         "Date",
+#         "Date YYYY",
+#         "Date MM",
+#         "Purchase price",
+#         "Margin"
+#     ],
+#     "Summit Medical": [ # Don't count index column!
+#         "Client Name",
+#         "Invoice #",
+#         "Item ID",
+#         "Net Sales Amount",
+#         "Comm Rate",
+#         "Comm $",
+#         "Sales Rep Code",
+#         "State",
+#         "ZIP Code",
+#         "Date",
+#         "Date MM",
+#         "Date YYYY",
+#         "Sales Rep Name"
+#     ]
+# }
+
+# def validate_file_format(df: pd.DataFrame, file_type: str):
+#     """
+#     Checks if the DataFrame contains all expected columns for the given file type.
+#     Returns (is_valid, missing_columns) where is_valid is True if all expected columns are present.
+#     """
+#     expected = set(EXPECTED_COLUMNS.get(file_type, []))
+#     actual = set(df.columns)
+#     missing = list(expected - actual)
+#     return (len(missing) == 0, missing)
 
 def get_db_connection():
     """Create a database connection."""
@@ -60,7 +168,7 @@ def check_for_blanks_with_details(df: pd.DataFrame) -> list:
     for row_idx, row in df.iterrows():
         blank_columns = row[row.isnull() | (row == "")].index.tolist()
         if blank_columns:
-            blank_details.append((row_idx + 1, blank_columns))
+            blank_details.append((row_idx, blank_columns))
     return blank_details
 
 def check_for_amount_line_issues(df: pd.DataFrame) -> list:
@@ -104,11 +212,6 @@ def update_table_data(table_name: str, df: pd.DataFrame):
 def sales_data_tab():
     st.title("Sales Data Upload Hub")
 
-    # If user clicks "Upload a New File", we clear session state and rerun
-    if st.button("Upload a New File"):
-        st.session_state.clear()
-        st.rerun()
-
     # Initialize a place to store processed dataframes if not present
     if "dataframes" not in st.session_state:
         st.session_state.dataframes = {}
@@ -117,6 +220,10 @@ def sales_data_tab():
 
     with col1:
         st.subheader("Step 1: Select Product Line")
+        # If user clicks "Upload a New File", we clear session state and rerun
+        if st.button("Upload a New File"):
+            st.session_state.clear()
+            st.rerun()
         selected_file_type = st.selectbox(
             "Choose the product line:",
             list(FILE_TYPES.keys()),
@@ -190,14 +297,36 @@ def sales_data_tab():
             finally:
                 os.remove(tmp_file_path)
 
+        # **New Step: Enforce numeric columns to be float, even if df is empty**
+        numeric_columns = ["Net Sales Amount", "Comm Rate", "Comm $"]
+        for col in numeric_columns:
+            if col in df.columns:
+                try:
+                    df[col] = df[col].astype("float64")
+                except Exception as e:
+                    st.error(f"Error casting column {col} to float: {e}")
+
+        # NEW: Validate that the file matches the expected format
+        is_valid, missing_columns = validate_file_format(df, file_type)
+        if not is_valid:
+            expected_list = "\n".join(f'"{col}"' for col in EXPECTED_COLUMNS.get(file_type, []))
+            st.error(
+                f"**The file uploaded does not match the expected format.**\n\n"
+                f"Please check that you have selected the correct product line and associated file.\n\n"
+                f"**Expected columns for {file_type}:**\n{expected_list}\n\n"
+                f"**Missing columns:** {', '.join(missing_columns)}"
+            )
+            return  # Stop further processing if the file is invalid
+
         # Check for 'Amount line ≤ 0' only for QuickBooks data
         amount_line_issues = []
         if file_type == "QuickBooks":
             amount_line_issues = check_for_amount_line_issues(df)
             if amount_line_issues:
                 st.error("Some rows in the QuickBooks file have 'Amount line' ≤ 0. Please review them.")
-                for row in amount_line_issues:
-                    st.markdown(f"- **Row:** {row}")
+                # for row in amount_line_issues:
+                rows_str = ", ".join(map(str, amount_line_issues))
+                st.markdown(f"**Row(s):** {rows_str}")
                     
         # Use a unique key for the data_editor to avoid collisions
         unique_key = f"editor_{file_name}_{file_type}"
@@ -205,7 +334,7 @@ def sales_data_tab():
             df,
             use_container_width=True,
             num_rows="dynamic",
-            hide_index=True,
+            hide_index=False,
             key=unique_key
         )
 
@@ -293,7 +422,7 @@ def data_upload_status_tab():
         data_status,
         use_container_width=True,
         num_rows="dynamic",
-        hide_index=True,
+        hide_index=False,
         key="data_status_editor"
     )
 

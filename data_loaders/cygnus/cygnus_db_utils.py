@@ -249,7 +249,7 @@ def update_commission_tier_2_date():
                 
                 threshold_key = (sales_rep, year)
                 if threshold_key not in threshold_dict:
-                    debug_messages.append(f"No threshold found for Sales Rep: {sales_rep}, Year: {year}. Skipping.")
+                    debug_messages.append(f":warning: Warning - Business objective threshold missing for Sales Rep: {sales_rep}, Year: {year}. Skipping.")
                     continue
                 threshold_value = threshold_dict[threshold_key]
                 
@@ -260,7 +260,7 @@ def update_commission_tier_2_date():
                 # Find the first row where cumulative sales meet or exceed the threshold
                 threshold_rows = group_df[group_df["cumsum"] >= threshold_value]
                 if threshold_rows.empty:
-                    debug_messages.append(f"Threshold not reached for Sales Rep: {sales_rep}, Year: {year}.")
+                    #debug_messages.append(f"Threshold not reached for Sales Rep: {sales_rep}, Year: {year}.")
                     continue
                 
                 # The month where the threshold is first reached
@@ -285,7 +285,7 @@ def update_commission_tier_2_date():
                 })
                 conn.commit()
                 debug_messages.append(
-                    f"Updated Commission tier 2 date for Sales Rep: {sales_rep}, Year: {year}, starting from month: {threshold_month}."
+                    f" :exclamation: Notification - Business objective threshold reached for Sales Rep: {sales_rep}, Year: {year}, starting from month: {threshold_month}."
                 )
     except Exception as e:
         debug_messages.append(f"Error updating Commission tier 2 date: {e}")

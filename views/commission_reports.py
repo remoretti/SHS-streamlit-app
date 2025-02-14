@@ -278,6 +278,18 @@ def get_years_for_sales_rep_any():
     finally:
         engine.dispose()
 
+def render_preview_table(df, css_class="", drop_index=True):
+    """
+    Render a DataFrame as an HTML table using custom CSS.
+    If drop_index is True, the index is reset and not shown;
+    otherwise the index is preserved.
+    """
+    if drop_index:
+        html_table = df.reset_index(drop=True).to_html(index=False, classes=css_class)
+    else:
+        html_table = df.to_html(index=True, classes=css_class)
+    st.markdown(html_table, unsafe_allow_html=True)
+
 def commission_reports_page():
     """Commission Reports Page Logic."""
     st.title("Commission Reports")
@@ -343,11 +355,43 @@ def commission_reports_page():
         else:
             st.write("No data available to summarize.")
 
+    # if report_df.empty:
+    #     st.warning(f"No data available for Sales Rep '{selected_sales_rep}' in year '{selected_year}'.")
+    # else:
+    #     st.markdown("---")
+    #     st.subheader(f"Commission Report for {selected_sales_rep} ({selected_year})")
+    #     st.dataframe(report_df, use_container_width=True)
     if report_df.empty:
         st.warning(f"No data available for Sales Rep '{selected_sales_rep}' in year '{selected_year}'.")
     else:
         st.markdown("---")
         st.subheader(f"Commission Report for {selected_sales_rep} ({selected_year})")
-        st.dataframe(report_df, use_container_width=True)
+        
+        # Inject CSS for the preview table.
+        st.markdown(
+            """
+            <style>
+            .large_table {
+                width: 100%;
+                font-size: 16px;
+                table-layout: fixed;  /* Forces equal column widths */
+            }
+            .large_table th, .large_table td {
+                text-align: right;
+                padding: 4px 8px;
+            }
+            /* Force only the second column to have a fixed width */
+            .large_table th:nth-child(1),
+            .large_table td:nth-child(1) {
+                width: 200px !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # Render the report using the helper, preserving the index (so that the "Product Line" column is visible)
+        render_preview_table(report_df, css_class="large_table")
+
 
 commission_reports_page()

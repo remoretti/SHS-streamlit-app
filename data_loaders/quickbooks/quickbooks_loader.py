@@ -2,6 +2,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 import os
+from data_loaders.validation_utils import validate_file_format
 
 # Load environment variables
 load_dotenv()
@@ -17,9 +18,19 @@ def load_excel_file_quickbooks(filepath: str) -> pd.DataFrame:
     """
     Load and preprocess a QuickBooks Excel file.
     """
+    # Set option to display all columns
+    pd.set_option('display.max_columns', None)
     # Read the Excel file
-    df = pd.read_excel(filepath, header=0)
+    raw_df = pd.read_excel(filepath, header=0, skiprows=4, dtype={"Num": str})
+    # Strip whitespace from all column names
+    #raw_df.columns = raw_df.columns.str.strip()
+    print(raw_df.head(3))
+    #Run validation on the raw DataFrame
+    is_valid, missing = validate_file_format(raw_df, "QuickBooks")
+    if not is_valid:
+        raise ValueError(f"Raw file format invalid. Missing columns: {', '.join(missing)}")
 
+    df = raw_df.copy()
     # Drop rows that are completely empty
     df.dropna(how='all', inplace=True)
 
@@ -45,21 +56,11 @@ def load_excel_file_quickbooks(filepath: str) -> pd.DataFrame:
     # # Drop rows where 'Customer name' == "HHS Transfers Customer"
     if 'Company name' in df.columns:
         df = df[df['Company name'] != "HHS Transfers Customer"]
+        df.drop(columns=['Company name'], inplace=True)
 
     # Remove rows where 'Purchase description' contains 'shipping' (case-insensitive)
     if 'Purchase description' in df.columns:
         df = df[~df['Purchase description'].str.contains('shipping', case=False, na=False)]
-
-    # # Populate 'Company name' based on 'Customer' conditions
-    if 'Customer' in df.columns and 'Company name' in df.columns:
-        def populate_company_name(customer, company_name):
-            if len(customer) >= 7 and customer[-7] == "-" and customer[-6] == "H":
-                return customer[-6:]
-            return company_name
-        
-        df['Company name'] = df.apply(
-            lambda row: populate_company_name(row['Customer'], row['Company name']), axis=1
-        )
 
     # Clean and process 'Amount line' as strings, then convert to float
     if 'Amount line' in df.columns:
