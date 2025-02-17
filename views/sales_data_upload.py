@@ -23,118 +23,13 @@ from data_loaders.validation_utils import validate_file_format, EXPECTED_COLUMNS
 # Load environment variables
 load_dotenv()
 
-DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
-
-# # Serving the function validate_file_format()
-# EXPECTED_COLUMNS = {
-#     # "Cygnus": [ # Don't count index column!
-#     #     "SKU",
-#     #     "Days Past",
-#     #     "Cust. ID",
-#     #     "Cust- Name",
-#     #     "Name",
-#     #     "Address",
-#     #     "City",
-#     #     "State",
-#     #     "Rep %",
-#     #     "Inv Date",
-#     #     "Due Date",
-#     #     "ClosedDate",
-#     #     "ClosedDate YYYY",
-#     #     "ClosedDate MM",
-#     #     "Invoice Total",
-#     #     "Total Rep Due",
-#     #     "Invoice",
-#     #     "Sales Rep",
-#     #     "Sales Rep Name"
-#     # ],
-#     "Cygnus": [
-#         "Sales Rep",
-#         "Cust. ID",
-#         "Cust- Name",
-#         "Name",
-#         "Address",
-#         "City",
-#         "State",
-#         "Invoice",
-#         "SKU",
-#         "Inv Date",
-#         "Due Date",
-#         "ClosedDate",
-#         "Days Past",
-#         "Rep %",
-#         "Invoice Total",
-#         "Total Rep Due"
-#     ],
-#     "Logiquip": [ # Don't count index column!
-#         "Agency",
-#         "Rep",
-#         "Doc Num",
-#         "Customer",
-#         "PO Number",
-#         "Ship To Zip",
-#         "Date Paid",
-#         "Contract",
-#         "Item Class",
-#         "Comm Rate",
-#         "Doc Amt",
-#         "Comm Amt",
-#         "Date Paid YYYY",
-#         "Date Paid MM",
-#         "Sales Rep Name",
-#         "SteppingStone"
-#     ],
-#     "QuickBooks": [ # Don't count index column!
-#         "Product Lines",
-#         "Transaction type",
-#         "Sales Rep Territory",
-#         "Product/Service",
-#         "Num", 
-#         "Sales Rep Name",
-#         "Line order",
-#         "Quantity",
-#         "Customer",
-#         "Purchase description",
-#         "Amount line",
-#         "Service Lines",
-#         "Date",
-#         "Date YYYY",
-#         "Date MM",
-#         "Purchase price",
-#         "Margin"
-#     ],
-#     "Summit Medical": [ # Don't count index column!
-#         "Client Name",
-#         "Invoice #",
-#         "Item ID",
-#         "Net Sales Amount",
-#         "Comm Rate",
-#         "Comm $",
-#         "Sales Rep Code",
-#         "State",
-#         "ZIP Code",
-#         "Date",
-#         "Date MM",
-#         "Date YYYY",
-#         "Sales Rep Name"
-#     ]
-# }
-
-# def validate_file_format(df: pd.DataFrame, file_type: str):
-#     """
-#     Checks if the DataFrame contains all expected columns for the given file type.
-#     Returns (is_valid, missing_columns) where is_valid is True if all expected columns are present.
-#     """
-#     expected = set(EXPECTED_COLUMNS.get(file_type, []))
-#     actual = set(df.columns)
-#     missing = list(expected - actual)
-#     return (len(missing) == 0, missing)
+DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@" \
+               f"{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
 
 def get_db_connection():
     """Create a database connection."""
     engine = create_engine(DATABASE_URL)
     return engine
-
 
 FILE_TYPES = {
     "Logiquip": "Logiquip",
@@ -209,6 +104,26 @@ def update_table_data(table_name: str, df: pd.DataFrame):
     finally:
         engine.dispose()
 
+# NEW helper: fetch unique Sales Rep names from sales_rep_commission_tier
+def get_unique_sales_rep_names():
+    """Fetch distinct Sales Rep Names from the sales_rep_commission_tier table."""
+    query = """
+        SELECT DISTINCT "Sales Rep Name"
+        FROM sales_rep_commission_tier
+        ORDER BY "Sales Rep Name"
+    """
+    engine = get_db_connection()
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(query))
+            sales_reps = [row[0] for row in result.fetchall()]
+        return sales_reps
+    except Exception as e:
+        st.error(f"Error fetching unique Sales Rep names: {e}")
+        return []
+    finally:
+        engine.dispose()
+
 def sales_data_tab():
     st.title("Sales Data Upload Hub")
 
@@ -220,19 +135,27 @@ def sales_data_tab():
 
     with col1:
         st.subheader("Step 1: Select Product Line")
-        # If user clicks "Upload a New File", we clear session state and rerun
+        # Instead of clearing the whole session state, only clear file-related keys.
         if st.button("Upload a New File"):
-            st.session_state.clear()
+            keys_to_clear = [
+                "selected_file_type",
+                "confirmed_file_bytes",
+                "confirmed_file_name",
+                "confirmed_file_type",
+                "dataframes"
+            ]
+            for key in keys_to_clear:
+                if key in st.session_state:
+                    del st.session_state[key]
             st.rerun()
         selected_file_type = st.selectbox(
             "Choose the product line:",
             list(FILE_TYPES.keys()),
             help="Select the product line you want to process."
         )
-        # If user changes product line, drop the previously confirmed file
+        # If product line changes, clear previous file data.
         if st.session_state.get("selected_file_type") != selected_file_type:
             st.session_state["selected_file_type"] = selected_file_type
-            # Clear any previously confirmed file from session state
             st.session_state.pop("confirmed_file_bytes", None)
             st.session_state.pop("confirmed_file_name", None)
             st.session_state.pop("confirmed_file_type", None)
@@ -240,27 +163,19 @@ def sales_data_tab():
     with col2:
         st.subheader("Step 2: Upload a File to Process")
         uploaded_file = st.file_uploader("Upload a .xlsx or .pdf file:", type=["xlsx", "pdf"])
-
         if uploaded_file and st.button("Confirm File Selection"):
-            # Read the entire file into memory once
             file_bytes = uploaded_file.read()
-
-            # Store file metadata + bytes in session state
             st.session_state["confirmed_file_bytes"] = file_bytes
             st.session_state["confirmed_file_name"] = uploaded_file.name
             st.session_state["confirmed_file_type"] = uploaded_file.type
-
             st.success(f"File '{uploaded_file.name}' has been confirmed!")
 
-    # Check if we have a confirmed file in session state
     if "confirmed_file_bytes" not in st.session_state:
         st.warning("Please upload and confirm a file to proceed.")
         return
 
     st.markdown("---")
-
     st.subheader("Step 3: Loaded and Enriched Data")
-
     file_type = st.session_state["selected_file_type"]
     file_name = st.session_state["confirmed_file_name"]
     mime_type = st.session_state["confirmed_file_type"]
@@ -270,34 +185,25 @@ def sales_data_tab():
 
     try:
         debug_info = []
-
-        # --- Create a temporary file from the bytes in session state ---
         if file_type == "Summit Medical" and mime_type == "application/pdf":
-            # This is a PDF => pass to the PDF loader
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                 tmp_file.write(file_bytes)
                 tmp_file_path = tmp_file.name
-
             try:
                 df = load_pdf_file_summit_medical(tmp_file_path)
             finally:
-                os.remove(tmp_file_path)  # clean up
+                os.remove(tmp_file_path)
         else:
-            # This is presumably an Excel (xlsx) or some other type
             suffix = ".xlsx" if mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" else None
-            # If the user uploaded a PDF for something else, or xlsx for something else, we still handle it
             extension = suffix if suffix else ".pdf"
-
             with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp_file:
                 tmp_file.write(file_bytes)
                 tmp_file_path = tmp_file.name
-
             try:
                 df = load_excel_file(tmp_file_path, file_type, debug_info)
             finally:
                 os.remove(tmp_file_path)
 
-        # **New Step: Enforce numeric columns to be float, even if df is empty**
         numeric_columns = ["Net Sales Amount", "Comm Rate", "Comm $"]
         for col in numeric_columns:
             if col in df.columns:
@@ -306,7 +212,6 @@ def sales_data_tab():
                 except Exception as e:
                     st.error(f"Error casting column {col} to float: {e}")
 
-        # NEW: Validate that the file matches the expected format
         is_valid, missing_columns = validate_file_format(df, file_type)
         if not is_valid:
             expected_list = "\n".join(f'"{col}"' for col in EXPECTED_COLUMNS.get(file_type, []))
@@ -316,42 +221,55 @@ def sales_data_tab():
                 f"**Expected columns for {file_type}:**\n{expected_list}\n\n"
                 f"**Missing columns:** {', '.join(missing_columns)}"
             )
-            return  # Stop further processing if the file is invalid
+            return
 
-        # Check for 'Amount line ≤ 0' only for QuickBooks data
         amount_line_issues = []
         if file_type == "QuickBooks":
             amount_line_issues = check_for_amount_line_issues(df)
             if amount_line_issues:
                 st.error("Some rows in the QuickBooks file have 'Amount line' ≤ 0. Please review them.")
-                # for row in amount_line_issues:
                 rows_str = ", ".join(map(str, amount_line_issues))
                 st.markdown(f"**Row(s):** {rows_str}")
-                    
-        # Use a unique key for the data_editor to avoid collisions
+
+        # --- New: Configure Column Constraints for Editable DataFrame ---
+        # Check if the DataFrame has a sales rep column.
+        rep_column = None
+        if "Sales Rep Name" in df.columns:
+            rep_column = "Sales Rep Name"
+        elif "Sales Rep" in df.columns:
+            rep_column = "Sales Rep"
+
+        col_config = {}
+        if rep_column:
+            rep_options = get_unique_sales_rep_names()  # This function defined above.
+            col_config[rep_column] = st.column_config.SelectboxColumn(
+                rep_column,
+                options=rep_options,
+                help="Select a Sales Rep from the list"
+            )
+
+        # Now render the editable data editor with our column configuration.
         unique_key = f"editor_{file_name}_{file_type}"
         edited_df = st.data_editor(
             df,
             use_container_width=True,
             num_rows="dynamic",
             hide_index=False,
-            key=unique_key
+            key=unique_key,
+            column_config=col_config  # Apply our drop-down configuration
         )
 
-        # Store the edited data frame in session state, keyed by file name
         st.session_state.dataframes[file_name] = (edited_df, file_type)
 
     except Exception as e:
         st.error(f"Error loading {file_name} of type {file_type}: {e}")
         return
 
-    # Final step: Save to DB
     if st.button("Confirm and Save to Database"):
         if not st.session_state.dataframes:
             st.warning("No data available to save. Please upload and process files first.")
             return
 
-        # Check if any row has blanks
         invalid_files = {}
         for f_name, (df_data, _) in st.session_state.dataframes.items():
             blank_details = check_for_blanks_with_details(df_data)
@@ -366,7 +284,6 @@ def sales_data_tab():
             return
 
         debug_output = []
-        # If all checks pass, let's proceed to save each dataframe
         for f_name, (df_data, f_type) in st.session_state.dataframes.items():
             try:
                 if f_type == "Cygnus":
@@ -377,7 +294,6 @@ def sales_data_tab():
                     debug_output.extend(save_summit_medical_to_db(df_data, "master_summit_medical_sales"))
                 elif f_type == "QuickBooks":
                     debug_output.extend(save_quickbooks_to_db(df_data, "master_quickbooks_sales"))
-                # (Add similar lines for other product lines if needed)
                 st.success(f"Data from '{f_name}' successfully saved to the '{f_type}' table.")
             except Exception as e:
                 st.error(f"Error saving '{f_name}' to the database: {e}")
@@ -391,7 +307,6 @@ def sales_data_tab():
 
 def data_upload_status_tab():
     st.title("Data Upload Status")
-
     data_status = fetch_table_data("data_status")
     if data_status.empty:
         st.warning("No data available in the data_status table. Initializing with default structure.")
@@ -413,7 +328,6 @@ def data_upload_status_tab():
 
     st.subheader("Data Status (Editable)")
     boolean_columns = [col for col in data_status.columns if col != "Product line"]
-    # Fill missing booleans with False
     for col in boolean_columns:
         data_status[col] = data_status[col].fillna(False).astype(bool)
     data_status["Product line"] = data_status["Product line"].astype(str)
@@ -435,7 +349,6 @@ def data_upload_status_tab():
 
     if st.session_state.save_initiated:
         if st.button("Yes, Replace Table"):
-            # Ensure booleans are indeed booleans
             for col in boolean_columns:
                 edited_data[col] = edited_data[col].astype(bool)
             update_table_data("data_status", edited_data)

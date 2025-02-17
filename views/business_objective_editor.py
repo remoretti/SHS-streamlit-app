@@ -177,38 +177,70 @@ def remove_subtotals_for_editing(df):
     """Remove Sub-Total rows before making the DataFrame editable."""
     return df[df["Sales Rep name"] != "Sub-Total"].reset_index(drop=True)
 
+def get_unique_sales_reps_commission_tier():
+    """Fetch distinct Sales Rep Names from the sales_rep_commission_tier table."""
+    query = """
+        SELECT DISTINCT "Sales Rep Name"
+        FROM sales_rep_commission_tier
+        ORDER BY "Sales Rep Name"
+    """
+    engine = get_db_connection()
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(query))
+            sales_reps = [row[0] for row in result.fetchall()]
+        return sales_reps
+    except Exception as e:
+        st.error(f"Error fetching Sales Reps from commission tier: {e}")
+        return []
+    finally:
+        engine.dispose()
+
+def get_unique_product_lines_service_to_product():
+    """Fetch distinct Product Lines from the service_to_product table."""
+    query = """
+        SELECT DISTINCT "Product Lines"
+        FROM service_to_product
+        WHERE "Product Lines" IS NOT NULL
+        ORDER BY "Product Lines"
+    """
+    engine = get_db_connection()
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(query))
+            product_lines = [row[0] for row in result.fetchall()]
+        return product_lines
+    except Exception as e:
+        st.error(f"Error fetching unique product lines from service_to_product: {e}")
+        return []
+    finally:
+        engine.dispose()
 
 
-# --------------- Streamlit UI ------------------
-
+# ----------------- Streamlit UI -----------------
 st.title("Business Objective Editor")
 
-
-# Layout with two columns for Year selection and Annual Objective Total
 col1, col2 = st.columns([1, 1])
 
-# Fetch available years
+# Fetch available years and allow year selection
 years = get_available_years()
 if not years:
     st.warning("No years available.")
 else:
     with col1:
-        # Year selection
         selected_year = st.selectbox("Select Year:", years)
 
     if selected_year:
-        # Fetch the data
         df = fetch_business_objective_data(selected_year)
 
         if not df.empty:
-            # Compute the Annual Objective Total from sub-totals
+            # Compute the Annual Objective Total from sub-totals.
             sub_totals = df[df["Sales Rep name"] == "Sub-Total"]
             annual_total = sub_totals["Annual Objective"].apply(
                 lambda x: float(x.replace("$", "").replace(",", ""))
             ).sum()
 
             with col2:
-                # Display Annual Objective Total, right-aligned
                 st.markdown(
                     f"""
                     <div style="text-align: right; font-size: 1.5em; font-weight: bold;">
@@ -218,27 +250,38 @@ else:
                     unsafe_allow_html=True,
                 )
 
-            # Initialize editing state if not already set
+            # Initialize editing state if not already set.
             if "editing" not in st.session_state:
                 st.session_state.editing = False
 
             if not st.session_state.editing:
-                # Show the "read-only" DataFrame with sub-totals highlighted
+                # Read-only mode: show the styled DataFrame with sub-totals.
                 styled_df = df.style.apply(highlight_subtotals_readonly, axis=1)
-
                 st.write("Preview with Sub-Totals Highlighted (Read-Only):")
-                # Add the "Edit Data" button
                 if st.button("Edit Data"):
-                    st.session_state.editing = True  # Switch to edit mode
-                st.write(
-                    styled_df,
-                    unsafe_allow_html=True,  # Allow styling
-                    use_container_width=True,
-                )
-
+                    st.session_state.editing = True
+                st.write(styled_df, unsafe_allow_html=True, use_container_width=True)
             else:
-                # Show the editable DataFrame with sub-totals removed
+                # Editing mode: remove Sub-Total rows.
                 editable_df = remove_subtotals_for_editing(df)
+
+                # Fetch unique Sales Rep names from the commission tier table for the drop-down.
+                sales_rep_options = get_unique_sales_reps_commission_tier()
+                product_line_options = get_unique_product_lines_service_to_product()
+
+                # Configure the "Sales Rep name" column to be a selectbox using the new Streamlit data editor column config API.
+                col_config = {
+                    "Sales Rep name": st.column_config.SelectboxColumn(
+                        "Sales Rep name",
+                        options=sales_rep_options,
+                        help="Select a Sales Rep name from the list"
+                    ),
+                    "Product line": st.column_config.SelectboxColumn(
+                        "Product line",
+                        options=product_line_options,
+                        help="Select a Product line from the list"
+                    )
+                }
 
                 st.write("Editable DataFrame (Sub-Totals Removed):")
                 edited_df = st.data_editor(
@@ -247,9 +290,10 @@ else:
                     num_rows="dynamic",
                     hide_index=True,
                     key="business_objective_editor",
+                    column_config=col_config
                 )
 
-                # Save button logic
+                # Save changes with confirmation logic.
                 if "save_initiated" not in st.session_state:
                     st.session_state.save_initiated = False
 
@@ -257,15 +301,15 @@ else:
                     st.session_state.save_initiated = True
                     st.warning("Are you sure you want to replace the current data with the new changes?")
 
-                # Confirmation button (appears only if save was initiated)
                 if st.session_state.save_initiated:
                     if st.button("Yes, Replace Table"):
                         update_business_objective_data(edited_df, selected_year)
                         st.session_state.save_initiated = False  # Reset state after save
                         st.session_state.editing = False  # Return to read-only mode
                         st.rerun()  # Reload the page to show updated data
-                    # --- New: Cancel Editing button ---
+
                 if st.button("Cancel Editing"):
-                    st.session_state.editing = False  # Cancel edit mode and revert to read-only
+                    st.session_state.editing = False
+                    st.rerun()
         else:
             st.warning(f"No data available for the selected year: {selected_year}.")

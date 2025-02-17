@@ -124,7 +124,6 @@ def generate_report(sales_rep, year):
     """
     engine = get_db_connection()
 
-    # If "All" is selected, process every Sales Rep; otherwise process only the selected one.
     if sales_rep == "All":
         try:
             with engine.connect() as conn:
@@ -141,7 +140,6 @@ def generate_report(sales_rep, year):
     else:
         all_sales_reps = [sales_rep]
 
-    # Initialize final report data structure.
     final_report_data = {}
 
     try:
@@ -149,11 +147,9 @@ def generate_report(sales_rep, year):
             for rep in all_sales_reps:
                 product_lines = get_unique_product_lines(rep, year)
                 for product_line in product_lines:
-                    # Initialize monthly commission amounts (months "01" to "12") and YTD total.
                     if product_line not in final_report_data:
                         final_report_data[product_line] = {str(i).zfill(2): 0 for i in range(1, 13)}
                         final_report_data[product_line]["Total"] = 0
-                        # Optionally, if a single rep is selected, also fetch the commission tier threshold.
                         if sales_rep != "All":
                             threshold_query = """
                                 SELECT "Commission tier threshold"
@@ -169,8 +165,6 @@ def generate_report(sales_rep, year):
                             threshold = threshold_result.scalar() or 0
                             final_report_data[product_line]["Comm Tier Threshold"] = threshold
 
-                    # --- Revised Commission Calculation Logic ---
-                    # Group harmonised_table rows by month (Date MM) for this rep/product_line.
                     commission_query = """
                         SELECT "Date MM",
                                SUM("Comm Amount tier 1") AS tier1_sum,
@@ -183,16 +177,12 @@ def generate_report(sales_rep, year):
                         GROUP BY "Date MM"
                         ORDER BY "Date MM"
                     """
-                    # Use .mappings() so that each row is a dict-like object.
                     commission_result = conn.execute(
                         text(commission_query),
                         {"sales_rep": rep, "year": year, "product_line": product_line}
                     ).mappings()
                     
-                    # Initialize payout (accumulated deferred tier2 amounts) for this product line.
                     payout = 0
-
-                    # Process each month in ascending order.
                     for row in commission_result.fetchall():
                         month = row["Date MM"]
                         month_str = str(month).zfill(2)
@@ -200,19 +190,13 @@ def generate_report(sales_rep, year):
                         tier2_sum = row["tier2_sum"] if row["tier2_sum"] is not None else 0
                         tier2_date = row["tier2_date"]
                         
-                        # New logic:
                         if tier2_date is None:
-                            # Tier 2 not yet applied this month: pay only tier1,
-                            # and accumulate the tier2 amount for a future month.
                             commission_amount = tier1_sum
                             payout += tier2_sum
                         elif tier2_date == f"{year}-{month_str}":
-                            # When the Commission tier 2 date equals the current month,
-                            # pay both tier1 and tier2 plus any previously deferred amount.
                             commission_amount = tier1_sum + tier2_sum + payout
-                            payout = 0  # Reset the payout after applying.
+                            payout = 0
                         else:
-                            # In any other case, pay the full amounts.
                             commission_amount = tier1_sum + tier2_sum
 
                         final_report_data[product_line][month_str] += commission_amount
@@ -224,11 +208,9 @@ def generate_report(sales_rep, year):
     finally:
         engine.dispose()
 
-    # Convert the aggregated data into a DataFrame.
     report_df = pd.DataFrame.from_dict(final_report_data, orient="index").reset_index()
     report_df.rename(columns={"index": "Product Line"}, inplace=True)
 
-    # Rename month columns to abbreviated names.
     month_mapping = {
         str(i).zfill(2): month for i, month in enumerate(
             ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1
@@ -236,22 +218,18 @@ def generate_report(sales_rep, year):
     }
     report_df.rename(columns=month_mapping, inplace=True)
 
-    # Ensure all numeric columns are correctly formatted.
     numeric_columns = [col for col in report_df.columns if col not in ["Product Line"]]
     for col in numeric_columns:
         report_df[col] = pd.to_numeric(report_df[col], errors="coerce").fillna(0)
 
-    # Compute a sub-total row.
     sub_total_values = report_df.drop(columns=["Product Line"]).sum().to_dict()
     sub_total_values["Product Line"] = "Sub-total"
     report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)
 
-    # Format numeric values as currency.
     currency_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
     for col in currency_columns:
         report_df[col] = report_df[col].map(lambda x: f"${x:,.2f}" if pd.notnull(x) else "")
 
-    # Format "Comm Tier Threshold" only if a single Sales Rep is selected.
     if sales_rep != "All" and "Comm Tier Threshold" in report_df.columns:
         report_df["Comm Tier Threshold"] = report_df["Comm Tier Threshold"].map(
             lambda x: f"${x:,.2f}" if pd.notnull(x) and x > 0 else ""
@@ -291,27 +269,38 @@ def render_preview_table(df, css_class="", drop_index=True):
     st.markdown(html_table, unsafe_allow_html=True)
 
 def commission_reports_page():
-    """Commission Reports Page Logic."""
     st.title("Commission Reports")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        # Fetch unique Sales Reps and add "All" option.
+        # Fetch unique Sales Reps
         sales_reps = get_unique_sales_reps()
-        sales_reps.insert(0, "All")
+        
+        # Apply restriction: if the logged-in user is a simple user, limit options.
+        if "user_permission" in st.session_state and st.session_state.user_permission.lower() == "user":
+            user_name = st.session_state.user_name
+            if user_name in sales_reps:
+                sales_reps = ["All", user_name]
+            else:
+                sales_reps = ["All"]
+        else:
+            sales_reps.insert(0, "All")
+        
         if not sales_reps:
             st.warning("No Sales Reps available.")
             return
 
-        # Step 1: Select Sales Rep.
         selected_sales_rep = st.selectbox("Select a Sales Rep:", sales_reps)
         if not selected_sales_rep:
             st.warning("Please select a Sales Rep to proceed.")
             return
 
-        # Step 2: Select Year.
-        years = get_years_for_sales_rep(selected_sales_rep) if selected_sales_rep != "All" else get_years_for_sales_rep_any()
+        if selected_sales_rep != "All":
+            years = get_years_for_sales_rep(selected_sales_rep)
+        else:
+            years = get_years_for_sales_rep_any()
+            
         if not years:
             st.warning(f"No years available for Sales Rep '{selected_sales_rep}'.")
             return
@@ -321,10 +310,8 @@ def commission_reports_page():
             st.warning("Please select a year to proceed.")
             return
 
-    # Fetch and display commission report.
     report_df = generate_report(selected_sales_rep, selected_year)
 
-    # (Optional) Format numeric columns with the $ symbol.
     if not report_df.empty:
         numeric_columns = report_df.select_dtypes(include=["float64", "int64"]).columns
         report_df[numeric_columns] = report_df[numeric_columns].map(
@@ -333,7 +320,6 @@ def commission_reports_page():
 
     with col2:
         if not report_df.empty:
-            # Calculate the YTD Total (excluding the sub-total row).
             if "Total" in report_df.columns:
                 filtered_df = report_df[report_df["Product Line"] != "Sub-total"]
                 if pd.api.types.is_numeric_dtype(filtered_df["Total"]):
@@ -355,32 +341,24 @@ def commission_reports_page():
         else:
             st.write("No data available to summarize.")
 
-    # if report_df.empty:
-    #     st.warning(f"No data available for Sales Rep '{selected_sales_rep}' in year '{selected_year}'.")
-    # else:
-    #     st.markdown("---")
-    #     st.subheader(f"Commission Report for {selected_sales_rep} ({selected_year})")
-    #     st.dataframe(report_df, use_container_width=True)
     if report_df.empty:
         st.warning(f"No data available for Sales Rep '{selected_sales_rep}' in year '{selected_year}'.")
     else:
         st.markdown("---")
         st.subheader(f"Commission Report for {selected_sales_rep} ({selected_year})")
         
-        # Inject CSS for the preview table.
         st.markdown(
             """
             <style>
             .large_table {
                 width: 100%;
                 font-size: 16px;
-                table-layout: fixed;  /* Forces equal column widths */
+                table-layout: fixed;
             }
             .large_table th, .large_table td {
                 text-align: right;
                 padding: 4px 8px;
             }
-            /* Force only the second column to have a fixed width */
             .large_table th:nth-child(1),
             .large_table td:nth-child(1) {
                 width: 200px !important;
@@ -390,8 +368,6 @@ def commission_reports_page():
             unsafe_allow_html=True
         )
         
-        # Render the report using the helper, preserving the index (so that the "Product Line" column is visible)
         render_preview_table(report_df, css_class="large_table")
-
-
+        
 commission_reports_page()

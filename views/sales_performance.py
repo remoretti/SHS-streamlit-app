@@ -234,7 +234,6 @@ def fetch_objectives(selected_year, selected_product_line, selected_salesperson)
     try:
         with engine.connect() as conn:
             df = pd.read_sql_query(text(query), conn, params=params)
-        # Ensure the Month column is integer and rename it for merging.
         df["Month"] = df["Month"].astype(int)
         df = df.rename(columns={"Month": "month_number"})
         return df
@@ -253,8 +252,6 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
-            # --- SQL Query with additional columns for payout calculation ---
-            # Note: The inline Sales Objective subquery has been removed.
             query = """
                 WITH commission_tier2 AS (
                     SELECT 
@@ -295,7 +292,6 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
                 GROUP BY h."Date MM", h."Product Line", h."Sales Rep", h."Date YYYY"
                 ORDER BY month_number;
             """
-            # Apply filtering logic dynamically.
             product_line_filter = 'AND h."Product Line" = :product_line' if selected_product_line != "All" else ""
             salesperson_filter = 'AND h."Sales Rep" = :salesperson' if selected_salesperson != "All" else ""
             query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
@@ -305,8 +301,6 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
             if selected_salesperson != "All":
                 params["salesperson"] = selected_salesperson
             result = conn.execute(text(query), params)
-            
-            # Load the query results into a DataFrame.
             data = pd.DataFrame(result.fetchall(), columns=[
                 "month_number", "Sales Actual", "Revenue Actual", "Commission_Amount",
                 "tier1_sum", "tier2_sum", "tier2_date"
@@ -314,7 +308,6 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
             data["month_number"] = data["month_number"].astype(int)
             data = data.sort_values("month_number")
             
-            # --- Compute Commission Payout in Python using iterative logic ---
             payout = 0
             commission_payout_list = []
             for _, row in data.iterrows():
@@ -322,7 +315,7 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
                 month_str = str(month_num).zfill(2)
                 tier1 = float(row["tier1_sum"]) if pd.notnull(row["tier1_sum"]) else 0
                 tier2 = float(row["tier2_sum"]) if pd.notnull(row["tier2_sum"]) else 0
-                tier2_date = row["tier2_date"]  # may be None or a string like "2023-04"
+                tier2_date = row["tier2_date"]
                 if pd.isnull(tier2_date):
                     commission_payout = tier1
                     payout += tier2
@@ -334,12 +327,9 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
                 commission_payout_list.append(commission_payout)
             data["Commission Payout"] = commission_payout_list
             
-            # Remove temporary columns no longer needed.
             data.drop(columns=["tier1_sum", "tier2_sum", "tier2_date"], inplace=True)
-            # Convert month_number to full month names.
             data["Month"] = data["month_number"].apply(lambda x: pd.to_datetime(str(x), format="%m").strftime("%B"))
             
-            # --- If both filters are "All", aggregate rows by month ---
             if selected_product_line == "All" and selected_salesperson == "All":
                 aggregated = data.groupby("month_number", as_index=False).agg({
                     "Sales Actual": "sum",
@@ -351,25 +341,20 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
                     lambda x: pd.to_datetime(str(x), format="%m").strftime("%B"))
                 data = aggregated
             
-            # Ensure all 12 months are present.
             all_months_df = pd.DataFrame({"month_number": list(range(1, 13))})
             merged_df = pd.merge(all_months_df, data, on="month_number", how="left").fillna(0)
             merged_df["Month"] = merged_df["month_number"].apply(
                 lambda x: pd.to_datetime(str(x), format="%m").strftime("%B"))
-            # Ensure numeric columns are float.
             numeric_columns = ["Sales Actual", "Revenue Actual", "Commission_Amount", "Commission Payout"]
             merged_df[numeric_columns] = merged_df[numeric_columns].astype(float)
             
-            # --- Merge in the Sales Objective from sales_rep_business_objective ---
             objectives_df = fetch_objectives(selected_year, selected_product_line, selected_salesperson)
             merged_df = pd.merge(merged_df, objectives_df, on="month_number", how="left").fillna(0)
             
-            # --- Compute % to Objective ---
             merged_df["% to Objective"] = merged_df.apply(
                 lambda row: f"{(row['Sales Actual'] / row['Sales Objective'] * 100):.2f}%"
                 if row["Sales Objective"] > 0 else "0.00%", axis=1
             )
-            # --- Compute SHS Margin as Revenue Actual minus Commission Payout ---
             merged_df["SHS Margin"] = merged_df["Revenue Actual"] - merged_df["Commission Payout"]
             
             return merged_df
@@ -380,31 +365,30 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
     finally:
         engine.dispose()
 
-def get_data_status_summary():
-    """Fetch data status and calculate summary."""
-    query = "SELECT * FROM data_status"
+def get_years_for_sales_rep_any():
+    """Fetch distinct years for all Sales Reps from the harmonised_table."""
+    query = """
+        SELECT DISTINCT "Date YYYY"
+        FROM harmonised_table
+        ORDER BY "Date YYYY"
+    """
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
-            df = pd.read_sql_query(query, conn)
-            boolean_df = df.iloc[:, 1:].replace({'t': True, 'f': False})
-            df["Total Months"] = boolean_df.sum(axis=1)
-            total_months_in_year = 12
-            summary = [
-                f"{row['Product line']}: {row['Total Months']}/{total_months_in_year}"
-                for _, row in df.iterrows()
-            ]
-        return summary
+            result = conn.execute(text(query))
+            years = [row[0] for row in result.fetchall()]
+        return years
     except Exception as e:
-        st.error(f"Error fetching data status summary: {e}")
+        st.error(f"Error fetching years for all Sales Reps: {e}")
         return []
     finally:
         engine.dispose()
 
 def render_preview_table(df, css_class="", drop_index=True):
     """
-    Render a DataFrame as an HTML table without the index by default.
-    Optionally preserve the index if drop_index is False.
+    Render a DataFrame as an HTML table using custom CSS.
+    If drop_index is True, the index is reset and not shown;
+    otherwise the index is preserved.
     """
     if drop_index:
         html_table = df.reset_index(drop=True).to_html(index=False, classes=css_class)
@@ -416,10 +400,8 @@ def render_preview_table(df, css_class="", drop_index=True):
 
 st.title("Sales Performance")
 
-# Layout with two columns
 col1, col2 = st.columns([1, 1])
 
-# Column 1: Filters
 with col1:
     years = get_unique_years()
     if not years:
@@ -428,22 +410,28 @@ with col1:
         selected_year = st.selectbox("Select a Year:", years)
         if selected_year:
             salespeople = get_salespeople_by_year(selected_year)
-            salespeople.insert(0, "All")
+            # Apply restriction for simple users:
+            if "user_permission" in st.session_state and st.session_state.user_permission.lower() == "user":
+                user_name = st.session_state.user_name
+                if user_name in salespeople:
+                    salespeople = ["All", user_name]
+                else:
+                    salespeople = ["All"]
+            else:
+                salespeople.insert(0, "All")
+            
             selected_salesperson = st.selectbox("Choose a Salesperson:", salespeople)
             product_lines = get_product_lines_by_year_and_salesperson(selected_year, selected_salesperson)
             product_lines.insert(0, "All")
             selected_product_line = st.selectbox("Choose a Product Line:", product_lines)
 
-# Generate Monthly DataFrame
 monthly_data = fetch_monthly_data(selected_year, selected_product_line, selected_salesperson)
 if monthly_data is None or monthly_data.empty:
     monthly_data = pd.DataFrame()
 
-# Column 2: YTD Summary
 with col2:
     if not monthly_data.empty:
         def parse_currency(value):
-            """Convert formatted currency strings to float."""
             try:
                 return float(str(value).replace("$", "").replace(",", "").replace("%", ""))
             except ValueError:
@@ -471,7 +459,6 @@ with col2:
     else:
         st.warning("No data available for the selected filters.")
 
-# Generate Monthly DataFrame for display (again)
 monthly_data = fetch_monthly_data(selected_year, selected_product_line, selected_salesperson)
 
 if not monthly_data.empty:
@@ -489,7 +476,6 @@ if not monthly_data.empty:
     sales_objective = [float(str(monthly_data.loc["Sales Objective", m]).replace("$", "").replace(",", ""))
                     if m in monthly_data.columns else 0 for m in all_months]
     sales_actual = [x if x > 0 else 0 for x in sales_actual]
-    # (Plotting code remains unchanged)
     fig, ax = plt.subplots(figsize=(12, 3))
     ax.bar(all_months, sales_actual, label="Sales Actual", color="blue", alpha=0.7)
     ax.bar(all_months, sales_objective, label="Sales Objective", color="orange", alpha=0.7, width=0.4, align="edge")
@@ -502,14 +488,12 @@ if not monthly_data.empty:
     ax.set_xticklabels(all_months, rotation=45, ha="right", fontsize=9)
     st.pyplot(fig)
 
-    # Format numeric values in monthly_data for display.
     for col in monthly_data.columns:
         monthly_data[col] = monthly_data[col].apply(
             lambda x: f"${x:,.2f}" if isinstance(x, (int, float)) and not str(x).endswith('%') else x
         )
 
     st.subheader("Monthly Performance Summary")
-    # Inject CSS for a read-only preview table.
     st.markdown(
         """
         <style>
@@ -520,7 +504,6 @@ if not monthly_data.empty:
         .large_table th, .large_table td {
             text-align: right !important;
         }
-        /* Force only the first column to have a fixed width */
         .large_table th:nth-child(1),
         .large_table td:nth-child(1) {
             width: 200px !important;
@@ -528,11 +511,10 @@ if not monthly_data.empty:
         }
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
     render_preview_table(monthly_data, css_class="large_table", drop_index=False)
     
-    # --- Display Data Upload Status using render_preview_table ---
     def fetch_data_status():
         query = "SELECT * FROM data_status"
         engine = get_db_connection()
@@ -549,7 +531,6 @@ if not monthly_data.empty:
     data_status_df = fetch_data_status()
     if not data_status_df.empty:
         st.subheader("Data Upload Status")
-        # Keep "Product line" as text; all other columns assumed boolean.
         boolean_columns = [col for col in data_status_df.columns if col != "Product line"]
         
         for col in boolean_columns:
@@ -567,21 +548,18 @@ if not monthly_data.empty:
             .large_table {
                 width: 100%;
                 font-size: 16px;
-                table-layout: fixed;  /* Forces equal column widths */
+                table-layout: fixed;
             }
-            /* Style header cells (th) to be centered */
             .large_table th {
                 text-align: center !important;
                 padding: 4px 8px;
-                word-wrap: break-word;  /* Ensure long content wraps */
+                word-wrap: break-word;
             }
-            /* Style data cells (td) as desired (e.g., right-aligned) */
             .large_table td {
                 text-align: right !important;
                 padding: 4px 8px;
                 word-wrap: break-word;
             }
-            /* Force only the first column to have a fixed width and left-aligned */
             .large_table th:nth-child(1),
             .large_table td:nth-child(1) {
                 width: 200px !important;

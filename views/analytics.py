@@ -6,12 +6,12 @@ import pygwalker as pyg
 from dotenv import load_dotenv
 import os
 
-
 # Load environment variables
 load_dotenv()
 
 # Database connection URL
-DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@" \
+               f"{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
 
 def get_db_connection():
     """Create a database connection."""
@@ -20,10 +20,7 @@ def get_db_connection():
 
 def fetch_table_data(table_name):
     """Fetch data from a given table."""
-    query = f"""
-        SELECT *
-        FROM {table_name}
-    """
+    query = f"SELECT * FROM {table_name}"
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
@@ -39,7 +36,7 @@ def analytics_page():
     """Analytics Page Logic."""
     st.title("Analytics Dashboard")
     
-    # Fetch data selection
+    # Data Selection
     st.subheader("Data Selection")
     table_choice = st.radio(
         "Select the data source for your visualization:",
@@ -47,7 +44,7 @@ def analytics_page():
         index=1,
     )
 
-    # Determine the table to fetch based on selection
+    # Determine the table to fetch based on selection.
     if table_choice == "All":
         data_df = fetch_table_data("harmonised_table")
     elif table_choice == "Cygnus":
@@ -58,6 +55,18 @@ def analytics_page():
         data_df = fetch_table_data("master_quickbooks_sales")
     else:  # Logiquip
         data_df = fetch_table_data("master_logiquip_sales")
+
+    # --- New: Filter Data for Simple Users ---
+    # If the logged-in user is a simple "user", only show rows where the Sales Rep
+    # (or Sales Rep Name) equals the logged-in user's name.
+    if "user_permission" in st.session_state and st.session_state.user_permission.lower() == "user":
+        user_name = st.session_state.user_name
+        if "Sales Rep" in data_df.columns:
+            data_df = data_df[data_df["Sales Rep"] == user_name]
+        elif "Sales Rep Name" in data_df.columns:
+            data_df = data_df[data_df["Sales Rep Name"] == user_name]
+        else:
+            st.warning("No Sales Rep column available for filtering.")
 
     if data_df.empty:
         st.warning(f"No data available in the {table_choice} table.")
@@ -72,25 +81,10 @@ def analytics_page():
         mime="text/csv",
     )
 
-    # Display data visualization using PyGWalker (default Cygnus for now)
+    # Data Visualization with PyGWalker
     st.subheader("Data Visualization with PyGWalker")
-    if table_choice == "Cygnus":
-        pyg_app = StreamlitRenderer(data_df)
-        pyg_app.explorer()
-    elif table_choice == "Logiquip":
-        pyg_app = StreamlitRenderer(data_df)
-        pyg_app.explorer()
-    elif table_choice == "Summit Medical":
-        pyg_app = StreamlitRenderer(data_df)
-        pyg_app.explorer()
-    elif table_choice == "QuickBooks":
-        pyg_app = StreamlitRenderer(data_df)
-        pyg_app.explorer()
-    elif table_choice == "All":
-        pyg_app = StreamlitRenderer(data_df)
-        pyg_app.explorer()
-    else:
-        st.info("Select the desired data source.")
+    pyg_app = StreamlitRenderer(data_df)
+    pyg_app.explorer()
 
 # Render the analytics page
 analytics_page()
