@@ -225,6 +225,10 @@ def generate_report(sales_rep, year):
     sub_total_values = report_df.drop(columns=["Product Line"]).sum().to_dict()
     sub_total_values["Product Line"] = "Sub-total"
     report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)
+    # Separate the "Sub-total" row and sort the remaining rows by "Product Line" ascending.
+    subtotal_df = report_df[report_df["Product Line"] == "Sub-total"]
+    main_df = report_df[report_df["Product Line"] != "Sub-total"].sort_values(by="Product Line", ascending=True)
+    report_df = pd.concat([main_df, subtotal_df], ignore_index=True)
 
     currency_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
     for col in currency_columns:

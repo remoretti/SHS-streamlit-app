@@ -100,13 +100,21 @@ else:
     desired_columns = ["Sales Rep Name", "Email", "Password", "Permission"]
     if set(desired_columns).issubset(base_df.columns):
         base_df = base_df[desired_columns]
-
+    # Define a column configuration for the editable DataFrame:
+    col_config = {
+        "Permission": st.column_config.SelectboxColumn(
+            "Permission",
+            options=["admin", "user"],
+            help="Select a permission level: Admin or User"
+        )
+    }
     edited_df = st.data_editor(
         base_df,
         use_container_width=True,
         num_rows="dynamic",
         hide_index=True,
-        key="access_editor"
+        key="access_editor",
+        column_config=col_config
     )
     
     # Confirmation logic for saving changes.

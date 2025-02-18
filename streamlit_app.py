@@ -107,25 +107,26 @@ if st.session_state.user_permission.lower() == "admin":
     tracker_sales_performance = st.Page("views/sales_performance.py", title="Sales Performance")
     tracker_commission_report = st.Page("views/commission_reports.py", title="Commission Reports")
     tracker_sales_history = st.Page("views/sales_history.py", title="Sales History")
-    tracker_analytics = st.Page("views/analytics.py", title="Analytics")
+    # tracker_analytics = st.Page("views/analytics.py", title="Analytics")
+    daum_analytics = st.Page("views/analytics.py", title="Analytics")
     daum_sales_data_upload = st.Page("views/sales_data_upload.py", title="Sales Data Upload")
     daum_business_objective_editor = st.Page("views/business_objective_editor.py", title="Business Objective Editor")
     daum_portfolio_management = st.Page("views/portfolio_management.py", title="Portfolio Management")
     daum_user_account_administration = st.Page("views/user_account_administration.py", title="User Account Administration")
     
     navigation_dict = {
-        "Tracker": [tracker_sales_performance, tracker_commission_report, tracker_sales_history, tracker_analytics],
-        "Data User Management": [daum_sales_data_upload, daum_business_objective_editor, daum_portfolio_management, daum_user_account_administration],
+        "Tracker": [tracker_sales_performance, tracker_commission_report, tracker_sales_history],
+        "Data User Management": [daum_sales_data_upload, daum_business_objective_editor, daum_portfolio_management, daum_user_account_administration, daum_analytics],
     }
 else:
     # Regular Users see only Tracker pages.
     tracker_sales_performance = st.Page("views/sales_performance.py", title="Sales Performance")
     tracker_commission_report = st.Page("views/commission_reports.py", title="Commission Reports")
     tracker_sales_history = st.Page("views/sales_history.py", title="Sales History")
-    tracker_analytics = st.Page("views/analytics.py", title="Analytics")
+    #tracker_analytics = st.Page("views/analytics.py", title="Analytics")
     
     navigation_dict = {
-        "Tracker": [tracker_sales_performance, tracker_commission_report, tracker_sales_history, tracker_analytics],
+        "Tracker": [tracker_sales_performance, tracker_commission_report, tracker_sales_history],
     }
 
 # Set page layout and run navigation.

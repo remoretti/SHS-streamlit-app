@@ -528,7 +528,7 @@ if not monthly_data.empty:
         finally:
             engine.dispose()
             
-    data_status_df = fetch_data_status()
+    data_status_df = fetch_data_status().sort_values(by="Product line", ascending=True)
     if not data_status_df.empty:
         st.subheader("Data Upload Status")
         boolean_columns = [col for col in data_status_df.columns if col != "Product line"]

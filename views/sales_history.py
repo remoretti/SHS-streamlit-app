@@ -156,6 +156,10 @@ if selected_sales_rep and selected_product_line:
 
     # Display the DataFrame.
     if not sales_history_df.empty:
+        # Convert "Num" column to plain text if the selected data source is QuickBooks Commission Report.
+        if selected_product_line_display.lower().startswith("quickbooks"):
+            if "Num" in sales_history_df.columns:
+                sales_history_df["Num"] = sales_history_df["Num"].astype(str)
         st.subheader(f"Sales Data Source: {selected_product_line_display}")
         st.dataframe(sales_history_df, use_container_width=True, height=600, hide_index=True)
     else:

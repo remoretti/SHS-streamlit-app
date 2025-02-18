@@ -57,36 +57,20 @@ def analytics_page():
         data_df = fetch_table_data("master_logiquip_sales")
 
     # --- New: Filter Data for Simple Users ---
+    # If the logged-in user is a simple "user", only show rows where the Sales Rep
+    # (or Sales Rep Name) equals the logged-in user's name.
     if "user_permission" in st.session_state and st.session_state.user_permission.lower() == "user":
-        user_name = st.session_state.user_name.strip()
-        # For Cygnus, Logiquip, and Summit Medical, use "Sales Rep Name"
-        if table_choice in ["Cygnus", "Logiquip", "Summit Medical"]:
-            if "Sales Rep Name" in data_df.columns:
-                data_df = data_df[data_df["Sales Rep Name"].str.strip() == user_name]
-            else:
-                st.warning("No 'Sales Rep Name' column available for filtering.")
+        user_name = st.session_state.user_name
+        if "Sales Rep" in data_df.columns:
+            data_df = data_df[data_df["Sales Rep"] == user_name]
+        elif "Sales Rep Name" in data_df.columns:
+            data_df = data_df[data_df["Sales Rep Name"] == user_name]
         else:
-            # For other tables, try "Sales Rep" first, then "Sales Rep Name"
-            if "Sales Rep" in data_df.columns and data_df["Sales Rep"].notnull().any():
-                data_df = data_df[data_df["Sales Rep"].str.strip() == user_name]
-            elif "Sales Rep Name" in data_df.columns:
-                data_df = data_df[data_df["Sales Rep Name"].str.strip() == user_name]
-            else:
-                st.warning("No Sales Rep column available for filtering.")
-
+            st.warning("No Sales Rep column available for filtering.")
 
     if data_df.empty:
         st.warning(f"No data available in the {table_choice} table.")
         return
-
-    # Allow user to download the data as CSV
-    csv_data = data_df.to_csv(index=False)
-    st.download_button(
-        label=f"Use {table_choice} data",
-        data=csv_data,
-        file_name=f"{table_choice.lower()}_data.csv",
-        mime="text/csv",
-    )
 
     # Data Visualization with PyGWalker
     st.subheader("Data Visualization with PyGWalker")
