@@ -61,7 +61,7 @@ def fetch_table_data(product_line, selected_sales_reps):
     """Fetch sales data for the selected product line and sales reps."""
     table_name = product_line  # The selected table name
     # Use the correct column name based on your schema:
-    sales_rep_column = "Sales Rep"  
+    sales_rep_column = "Sales Rep Name"  
 
     # Construct the filter query for sales reps.
     sales_rep_filter = " OR ".join([f'"{sales_rep_column}" = :rep{i}' for i in range(len(selected_sales_reps))])

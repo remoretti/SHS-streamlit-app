@@ -257,7 +257,7 @@ else:
             if not st.session_state.editing:
                 # Read-only mode: show the styled DataFrame with sub-totals.
                 styled_df = df.style.apply(highlight_subtotals_readonly, axis=1)
-                st.write("Preview with Sub-Totals Highlighted (Read-Only):")
+                #st.write("Preview with Sub-Totals Highlighted (Read-Only):")
                 if st.button("Edit Data"):
                     st.session_state.editing = True
                 st.write(styled_df, unsafe_allow_html=True, use_container_width=True)

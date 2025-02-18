@@ -57,16 +57,23 @@ def analytics_page():
         data_df = fetch_table_data("master_logiquip_sales")
 
     # --- New: Filter Data for Simple Users ---
-    # If the logged-in user is a simple "user", only show rows where the Sales Rep
-    # (or Sales Rep Name) equals the logged-in user's name.
     if "user_permission" in st.session_state and st.session_state.user_permission.lower() == "user":
-        user_name = st.session_state.user_name
-        if "Sales Rep" in data_df.columns:
-            data_df = data_df[data_df["Sales Rep"] == user_name]
-        elif "Sales Rep Name" in data_df.columns:
-            data_df = data_df[data_df["Sales Rep Name"] == user_name]
+        user_name = st.session_state.user_name.strip()
+        # For Cygnus, Logiquip, and Summit Medical, use "Sales Rep Name"
+        if table_choice in ["Cygnus", "Logiquip", "Summit Medical"]:
+            if "Sales Rep Name" in data_df.columns:
+                data_df = data_df[data_df["Sales Rep Name"].str.strip() == user_name]
+            else:
+                st.warning("No 'Sales Rep Name' column available for filtering.")
         else:
-            st.warning("No Sales Rep column available for filtering.")
+            # For other tables, try "Sales Rep" first, then "Sales Rep Name"
+            if "Sales Rep" in data_df.columns and data_df["Sales Rep"].notnull().any():
+                data_df = data_df[data_df["Sales Rep"].str.strip() == user_name]
+            elif "Sales Rep Name" in data_df.columns:
+                data_df = data_df[data_df["Sales Rep Name"].str.strip() == user_name]
+            else:
+                st.warning("No Sales Rep column available for filtering.")
+
 
     if data_df.empty:
         st.warning(f"No data available in the {table_choice} table.")

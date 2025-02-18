@@ -54,32 +54,29 @@ if "authenticated" not in st.session_state:
     st.session_state.user_name = None
 
 if not st.session_state.authenticated:
-    st.title("Welcome to Sales Performance Tracker")
-    st.write("Please log in to continue.")
 
-    # Create two columns for login inputs.
-    col1, col2 = st.columns(2)
-    with col1:
+
+    # Create three columns: left spacer, center login form, and right spacer.
+    col_left, col_center, col_right = st.columns([1, 1, 1])
+    with col_center:
+        #st.title("Welcome to")
+        st.title("Sales Performance Tracker")
+        st.write("Please log in to continue.")
         email = st.text_input("Email")
-    with col2:
         password = st.text_input("Password", type="password")
-    
-    
+        if st.button("Confirm"):
+            sales_rep_name, permission = authenticate_user(email, password)
+            if permission:
+                st.session_state.authenticated = True
+                st.session_state.user_permission = permission
+                st.session_state.user_name = sales_rep_name  # Use the Sales Rep Name for filtering
+                st.success("Logged in successfully!")
+                st.rerun()
+            else:
+                st.error("Invalid credentials! Please try again.")
 
-    if st.button("Confirm"):
-        sales_rep_name, permission = authenticate_user(email, password)
-        if permission:
-            st.session_state.authenticated = True
-            st.session_state.user_permission = permission
-            st.session_state.user_name = sales_rep_name  # Use the Sales Rep Name for filtering
-            st.success("Logged in successfully!")
-            st.rerun()
-        else:
-            st.error("Invalid credentials! Please try again.")
-    
-    # Display an image below the two columns.
-    st.image("assets/images-2.jpeg", use_container_width=False, caption="Powered by Xantage")
-    st.stop()  # Prevent the rest of the app from loading until login succeeds.
+        st.image("assets/images-2.jpeg", use_container_width=False, caption="Powered by Xantage")
+    st.stop()  # Prevents the rest of the app from loading until login succeeds.
 
 
 # ---------------------------

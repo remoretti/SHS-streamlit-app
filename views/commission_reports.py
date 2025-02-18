@@ -154,9 +154,9 @@ def generate_report(sales_rep, year):
                             threshold_query = """
                                 SELECT "Commission tier threshold"
                                 FROM sales_rep_commission_tier_threshold
-                                WHERE "Sales Rep name" = :sales_rep
+                                WHERE lower("Sales Rep name") = lower(:sales_rep)
                                   AND "Year" = :year
-                                  AND "Product line" = :product_line
+                                  AND lower("Product line") = lower(:product_line)
                             """
                             threshold_result = conn.execute(
                                 text(threshold_query),

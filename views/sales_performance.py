@@ -91,10 +91,10 @@ def get_ytd_sales_actual(selected_year, selected_product_line, selected_salesper
           {product_line_filter}
           {salesperson_filter}
     """
-    product_line_filter = 'AND "Product Line" = :product_line' if selected_product_line != "All" else ""
+    product_line_filter = 'AND lower("Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
     salesperson_filter = ""
     if selected_salesperson != "All":
-        salesperson_filter = 'AND "Sales Rep" = :salesperson'
+        salesperson_filter = 'AND lower("Sales Rep") = lower(:salesperson)'
     query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
     engine = get_db_connection()
     try:
@@ -122,10 +122,10 @@ def get_ytd_revenue_actual(selected_year, selected_product_line, selected_salesp
           {product_line_filter}
           {salesperson_filter}
     """
-    product_line_filter = 'AND "Product Line" = :product_line' if selected_product_line != "All" else ""
+    product_line_filter = 'AND lower("Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
     salesperson_filter = ""
     if selected_salesperson != "All":
-        salesperson_filter = 'AND "Sales Rep" = :salesperson'
+        salesperson_filter = 'AND lower("Sales Rep") = lower(:salesperson)'
     query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
     engine = get_db_connection()
     try:
@@ -153,8 +153,8 @@ def get_ytd_shs_margin(selected_year, selected_product_line, selected_salesperso
           {product_line_filter}
           {salesperson_filter}
     """
-    product_line_filter = 'AND "Product Line" = :product_line' if selected_product_line != "All" else ""
-    salesperson_filter = 'AND "Sales Rep" = :salesperson' if selected_salesperson != "All" else ""
+    product_line_filter = 'AND lower("Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
+    salesperson_filter = 'AND lower("Sales Rep") = lower(:salesperson)' if selected_salesperson != "All" else ""
     query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
     engine = get_db_connection()
     try:
@@ -191,8 +191,8 @@ def get_ytd_commission_payout(selected_year, selected_product_line, selected_sal
           {product_line_filter}
           {salesperson_filter}
     """
-    product_line_filter = 'AND "Product Line" = :product_line' if selected_product_line != "All" else ""
-    salesperson_filter = 'AND "Sales Rep" = :salesperson' if selected_salesperson != "All" else ""
+    product_line_filter = 'AND lower("Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
+    salesperson_filter = 'AND lower("Sales Rep") = lower(:salesperson)' if selected_salesperson != "All" else ""
     query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
     engine = get_db_connection()
     try:
@@ -223,10 +223,10 @@ def fetch_objectives(selected_year, selected_product_line, selected_salesperson)
     """
     params = {"year": selected_year}
     if selected_salesperson != "All":
-        query += ' AND "Sales Rep name" = :sales_rep'
+        query += ' AND lower("Sales Rep name") = lower(:sales_rep)'
         params["sales_rep"] = selected_salesperson
     if selected_product_line != "All":
-        query += ' AND "Product line" = :product_line'
+        query += ' AND lower("Product line") = lower(:product_line)'
         params["product_line"] = selected_product_line
     query += ' GROUP BY "Month" ORDER BY "Month"::integer'
     
@@ -292,8 +292,8 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
                 GROUP BY h."Date MM", h."Product Line", h."Sales Rep", h."Date YYYY"
                 ORDER BY month_number;
             """
-            product_line_filter = 'AND h."Product Line" = :product_line' if selected_product_line != "All" else ""
-            salesperson_filter = 'AND h."Sales Rep" = :salesperson' if selected_salesperson != "All" else ""
+            product_line_filter = 'AND lower(h."Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
+            salesperson_filter = 'AND lower(h."Sales Rep") = lower(:salesperson)' if selected_salesperson != "All" else ""
             query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
             params = {"year": str(selected_year)}
             if selected_product_line != "All":
