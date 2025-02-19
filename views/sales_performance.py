@@ -91,10 +91,10 @@ def get_ytd_sales_actual(selected_year, selected_product_line, selected_salesper
           {product_line_filter}
           {salesperson_filter}
     """
-    product_line_filter = 'AND lower("Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
+    product_line_filter = 'AND "Product Line" = :product_line' if selected_product_line != "All" else ""
     salesperson_filter = ""
     if selected_salesperson != "All":
-        salesperson_filter = 'AND lower("Sales Rep") = lower(:salesperson)'
+        salesperson_filter = 'AND "Sales Rep" = :salesperson'
     query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
     engine = get_db_connection()
     try:
@@ -122,10 +122,10 @@ def get_ytd_revenue_actual(selected_year, selected_product_line, selected_salesp
           {product_line_filter}
           {salesperson_filter}
     """
-    product_line_filter = 'AND lower("Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
+    product_line_filter = 'AND "Product Line" = :product_line' if selected_product_line != "All" else ""
     salesperson_filter = ""
     if selected_salesperson != "All":
-        salesperson_filter = 'AND lower("Sales Rep") = lower(:salesperson)'
+        salesperson_filter = 'AND "Sales Rep" = :salesperson'
     query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
     engine = get_db_connection()
     try:
@@ -153,8 +153,8 @@ def get_ytd_shs_margin(selected_year, selected_product_line, selected_salesperso
           {product_line_filter}
           {salesperson_filter}
     """
-    product_line_filter = 'AND lower("Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
-    salesperson_filter = 'AND lower("Sales Rep") = lower(:salesperson)' if selected_salesperson != "All" else ""
+    product_line_filter = 'AND "Product Line" = :product_line' if selected_product_line != "All" else ""
+    salesperson_filter = 'AND "Sales Rep" = :salesperson' if selected_salesperson != "All" else ""
     query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
     engine = get_db_connection()
     try:
@@ -191,8 +191,8 @@ def get_ytd_commission_payout(selected_year, selected_product_line, selected_sal
           {product_line_filter}
           {salesperson_filter}
     """
-    product_line_filter = 'AND lower("Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
-    salesperson_filter = 'AND lower("Sales Rep") = lower(:salesperson)' if selected_salesperson != "All" else ""
+    product_line_filter = 'AND "Product Line" = :product_line' if selected_product_line != "All" else ""
+    salesperson_filter = 'AND "Sales Rep" = :salesperson' if selected_salesperson != "All" else ""
     query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
     engine = get_db_connection()
     try:
@@ -223,10 +223,10 @@ def fetch_objectives(selected_year, selected_product_line, selected_salesperson)
     """
     params = {"year": selected_year}
     if selected_salesperson != "All":
-        query += ' AND lower("Sales Rep name") = lower(:sales_rep)'
+        query += ' AND "Sales Rep name" = :sales_rep'
         params["sales_rep"] = selected_salesperson
     if selected_product_line != "All":
-        query += ' AND lower("Product line") = lower(:product_line)'
+        query += ' AND "Product line" = :product_line'
         params["product_line"] = selected_product_line
     query += ' GROUP BY "Month" ORDER BY "Month"::integer'
     
@@ -245,14 +245,39 @@ def fetch_objectives(selected_year, selected_product_line, selected_salesperson)
 
 def fetch_monthly_data(selected_year, selected_product_line, selected_salesperson):
     """
-    Fetch monthly sales performance data (from harmonised_table) including dynamically calculated commission values.
-    Then, merge in the monthly Sales Objective (Business Objective) from sales_rep_business_objective
-    based on the user-selected filters.
+    Fetch monthly sales performance data (including commission calculations) from harmonised_table,
+    then merge with monthly objectives.
+    
+    This version distinguishes among these cases:
+      1. Salesperson == "All" AND Product Line == "All"
+      2. Salesperson != "All" AND Product Line == "All"
+      3. Salesperson == "All" AND Product Line != "All"
+      4. Salesperson != "All" AND Product Line != "All"
+      
+    After computing each group’s commission using cumulative logic (with threshold determination),
+    the results are aggregated by month.
     """
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
-            query = """
+            # Decide on extra grouping keys based on selections.
+            select_extra = ""
+            group_by_extra = ""
+            if selected_product_line == "All" and selected_salesperson == "All":
+                # Case 1: Multiple sales reps and multiple product lines.
+                select_extra = ', h."Sales Rep" AS "Sales Rep", h."Product Line" AS "Product Line"'
+                group_by_extra = ', h."Sales Rep", h."Product Line"'
+            elif selected_product_line == "All" and selected_salesperson != "All":
+                # Case 2: Single salesperson, multiple product lines.
+                select_extra = ', h."Product Line" AS "Product Line"'
+                group_by_extra = ', h."Product Line"'
+            elif selected_product_line != "All" and selected_salesperson == "All":
+                # Case 3: Single product line, multiple sales reps.
+                select_extra = ', h."Sales Rep" AS "Sales Rep"'
+                group_by_extra = ', h."Sales Rep"'
+            # Else, Case 4: Both filters fixed; no extra grouping needed.
+            
+            query = f"""
                 WITH commission_tier2 AS (
                     SELECT 
                         "Date MM"::INTEGER AS month_number,
@@ -264,17 +289,18 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
                     GROUP BY "Date MM", "Sales Rep", "Product Line"
                 )
                 SELECT 
-                    h."Date MM"::INTEGER AS month_number,
+                    h."Date MM"::INTEGER AS month_number
+                    {select_extra},
                     SUM(h."Sales Actual") AS "Sales Actual",
                     SUM(h."Rev Actual") AS "Revenue Actual",
                     SUM(
                         CASE 
                             WHEN h."Commission tier 2 date" IS NULL 
-                            THEN h."Comm Amount tier 1"
-                            WHEN SPLIT_PART(h."Commission tier 2 date", '-', 2)::INTEGER > h."Date MM"::INTEGER
-                            THEN h."Comm Amount tier 1"
-                            WHEN SPLIT_PART(h."Commission tier 2 date", '-', 2)::INTEGER = h."Date MM"::INTEGER
-                            THEN h."Comm Amount tier 1" + h."Comm tier 2 diff amount" + COALESCE(ct.payback, 0)
+                                THEN h."Comm Amount tier 1"
+                            WHEN SPLIT_PART(h."Commission tier 2 date", '-', 2)::INTEGER > h."Date MM"::INTEGER 
+                                THEN h."Comm Amount tier 1"
+                            WHEN SPLIT_PART(h."Commission tier 2 date", '-', 2)::INTEGER = h."Date MM"::INTEGER 
+                                THEN h."Comm Amount tier 1" + h."Comm tier 2 diff amount" + COALESCE(ct.payback, 0)
                             ELSE h."Comm Amount tier 1" + h."Comm tier 2 diff amount"
                         END
                     ) AS "Commission_Amount",
@@ -287,76 +313,143 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
                  AND h."Sales Rep" = ct."Sales Rep"
                  AND h."Product Line" = ct."Product Line"
                 WHERE h."Date YYYY" = :year
-                  {product_line_filter}
-                  {salesperson_filter}
-                GROUP BY h."Date MM", h."Product Line", h."Sales Rep", h."Date YYYY"
-                ORDER BY month_number;
+                  {f'AND h."Product Line" = :product_line' if selected_product_line != "All" else ""}
+                  {f'AND h."Sales Rep" = :salesperson' if selected_salesperson != "All" else ""}
+                GROUP BY h."Date MM" {group_by_extra}
+                ORDER BY h."Date MM"
             """
-            product_line_filter = 'AND lower(h."Product Line") = lower(:product_line)' if selected_product_line != "All" else ""
-            salesperson_filter = 'AND lower(h."Sales Rep") = lower(:salesperson)' if selected_salesperson != "All" else ""
-            query = query.format(product_line_filter=product_line_filter, salesperson_filter=salesperson_filter)
             params = {"year": str(selected_year)}
             if selected_product_line != "All":
                 params["product_line"] = selected_product_line
             if selected_salesperson != "All":
                 params["salesperson"] = selected_salesperson
+
             result = conn.execute(text(query), params)
-            data = pd.DataFrame(result.fetchall(), columns=[
-                "month_number", "Sales Actual", "Revenue Actual", "Commission_Amount",
-                "tier1_sum", "tier2_sum", "tier2_date"
-            ])
+            data = pd.DataFrame(result.fetchall(), columns=result.keys())
             data["month_number"] = data["month_number"].astype(int)
-            data = data.sort_values("month_number")
             
-            payout = 0
-            commission_payout_list = []
-            for _, row in data.iterrows():
-                month_num = int(row["month_number"])
-                month_str = str(month_num).zfill(2)
-                tier1 = float(row["tier1_sum"]) if pd.notnull(row["tier1_sum"]) else 0
-                tier2 = float(row["tier2_sum"]) if pd.notnull(row["tier2_sum"]) else 0
-                tier2_date = row["tier2_date"]
-                if pd.isnull(tier2_date):
-                    commission_payout = tier1
-                    payout += tier2
-                elif tier2_date == f"{selected_year}-{month_str}":
-                    commission_payout = tier1 + tier2 + payout
-                    payout = 0
+            # --- Compute Commission Payout Using Cumulative Logic with Threshold ---
+            # We'll define a function that, for each group, computes cumulative sales and applies
+            # the rule: use tier1 commission until the threshold is reached, then in the threshold month
+            # add all accumulated differential.
+            def compute_cumulative(group):
+                group = group.sort_values("month_number")
+                cumulative_sales = 0
+                cumulative_diff = 0  # Differential accumulated (i.e. extra amount due if tier2 applied)
+                threshold_reached = False
+                cp_list = []
+                
+                # Determine threshold for this group.
+                # Use group values and the current selections.
+                if "Sales Rep" in group.columns and "Product Line" in group.columns:
+                    sales_rep = group.iloc[0]["Sales Rep"]
+                    product_line_val = group.iloc[0]["Product Line"]
+                elif "Product Line" in group.columns:
+                    sales_rep = selected_salesperson
+                    product_line_val = group.iloc[0]["Product Line"]
+                elif "Sales Rep" in group.columns:
+                    sales_rep = group.iloc[0]["Sales Rep"]
+                    product_line_val = selected_product_line
                 else:
-                    commission_payout = tier1 + tier2
-                commission_payout_list.append(commission_payout)
-            data["Commission Payout"] = commission_payout_list
+                    sales_rep = selected_salesperson
+                    product_line_val = selected_product_line
+
+                # Fetch threshold from the database.
+                threshold = None
+                try:
+                    engine_thr = get_db_connection()
+                    with engine_thr.connect() as conn_thr:
+                        res = conn_thr.execute(
+                            text("""
+                                SELECT "Commission tier threshold"
+                                FROM sales_rep_commission_tier_threshold
+                                WHERE lower("Sales Rep name") = lower(:sales_rep)
+                                  AND "Year" = :year
+                                  AND lower("Product line") = lower(:product_line)
+                            """),
+                            {"sales_rep": sales_rep, "year": str(selected_year), "product_line": product_line_val}
+                        ).fetchone()
+                        if res is not None:
+                            threshold = res[0]
+                    engine_thr.dispose()
+                except Exception as e:
+                    threshold = None
+                if threshold is None:
+                    # If no threshold is set, assume it will never be reached.
+                    threshold = float('inf')
+                
+                for _, row in group.iterrows():
+                    # Accumulate monthly sales.
+                    monthly_sales = float(row["Sales Actual"]) if pd.notnull(row["Sales Actual"]) else 0
+                    cumulative_sales += monthly_sales
+                    
+                    month_str = str(int(row["month_number"])).zfill(2)
+                    tier1 = float(row["tier1_sum"]) if pd.notnull(row["tier1_sum"]) else 0
+                    tier2 = float(row["tier2_sum"]) if pd.notnull(row["tier2_sum"]) else 0
+                    # For each month, compute the differential for that month.
+                    # Here we assume that tier2_sum represents the extra commission amount over tier1_sum.
+                    
+                    if not threshold_reached:
+                        if cumulative_sales < threshold:
+                            # Threshold not reached: report only tier1 commission.
+                            cp = tier1
+                            cumulative_diff += tier2  # accumulate the extra differential
+                        else:
+                            # This month is the threshold month.
+                            threshold_reached = True
+                            # Report this month using tier2 for current month PLUS add all accumulated differential.
+                            cp = (tier1 + tier2) + cumulative_diff
+                            cumulative_diff = 0  # reset after payout applied
+                    else:
+                        # After threshold: always use tier2 commission.
+                        cp = tier1 + tier2
+                    cp_list.append(cp)
+                group["Commission Payout"] = cp_list
+                return group
+
+            # Apply the cumulative function if we have extra grouping; if not, treat the whole DataFrame as one group.
+            if group_by_extra:
+                # Determine grouping columns.
+                if selected_product_line == "All" and selected_salesperson == "All":
+                    grouping_cols = ["Sales Rep", "Product Line"]
+                elif selected_product_line == "All" and selected_salesperson != "All":
+                    grouping_cols = ["Product Line"]
+                elif selected_product_line != "All" and selected_salesperson == "All":
+                    grouping_cols = ["Sales Rep"]
+                else:
+                    grouping_cols = []
+                data = data.groupby(grouping_cols, group_keys=False).apply(compute_cumulative)
+            else:
+                data = data.sort_values("month_number")
+                data = compute_cumulative(data)
             
-            data.drop(columns=["tier1_sum", "tier2_sum", "tier2_date"], inplace=True)
-            data["Month"] = data["month_number"].apply(lambda x: pd.to_datetime(str(x), format="%m").strftime("%B"))
-            
-            if selected_product_line == "All" and selected_salesperson == "All":
-                aggregated = data.groupby("month_number", as_index=False).agg({
-                    "Sales Actual": "sum",
-                    "Revenue Actual": "sum",
-                    "Commission_Amount": "sum",
-                    "Commission Payout": "sum"
-                })
-                aggregated["Month"] = aggregated["month_number"].apply(
-                    lambda x: pd.to_datetime(str(x), format="%m").strftime("%B"))
-                data = aggregated
-            
-            all_months_df = pd.DataFrame({"month_number": list(range(1, 13))})
-            merged_df = pd.merge(all_months_df, data, on="month_number", how="left").fillna(0)
-            merged_df["Month"] = merged_df["month_number"].apply(
-                lambda x: pd.to_datetime(str(x), format="%m").strftime("%B"))
-            numeric_columns = ["Sales Actual", "Revenue Actual", "Commission_Amount", "Commission Payout"]
-            merged_df[numeric_columns] = merged_df[numeric_columns].astype(float)
-            
+            # --- Aggregate Final Data by Month ---
+            aggregated = data.groupby("month_number", as_index=False).agg({
+                "Sales Actual": "sum",
+                "Revenue Actual": "sum",
+                "Commission_Amount": "sum",
+                "Commission Payout": "sum"
+            })
+            aggregated["Month"] = aggregated["month_number"].apply(
+                lambda x: pd.to_datetime(str(x), format="%m").strftime("%B")
+            )
+
+            # --- Merge with Objectives ---
             objectives_df = fetch_objectives(selected_year, selected_product_line, selected_salesperson)
+            all_months_df = pd.DataFrame({"month_number": list(range(1, 13))})
+            merged_df = pd.merge(all_months_df, aggregated, on="month_number", how="left").fillna(0)
+            merged_df["Month"] = merged_df["month_number"].apply(
+                lambda x: pd.to_datetime(str(x), format="%m").strftime("%B")
+            )
+            for col in ["Sales Actual", "Revenue Actual", "Commission_Amount", "Commission Payout"]:
+                merged_df[col] = merged_df[col].astype(float)
             merged_df = pd.merge(merged_df, objectives_df, on="month_number", how="left").fillna(0)
-            
             merged_df["% to Objective"] = merged_df.apply(
                 lambda row: f"{(row['Sales Actual'] / row['Sales Objective'] * 100):.2f}%"
                 if row["Sales Objective"] > 0 else "0.00%", axis=1
             )
             merged_df["SHS Margin"] = merged_df["Revenue Actual"] - merged_df["Commission Payout"]
-            
+
             return merged_df
 
     except Exception as e:
@@ -364,6 +457,7 @@ def fetch_monthly_data(selected_year, selected_product_line, selected_salesperso
         return pd.DataFrame()
     finally:
         engine.dispose()
+
 
 def get_years_for_sales_rep_any():
     """Fetch distinct years for all Sales Reps from the harmonised_table."""

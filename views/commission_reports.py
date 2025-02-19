@@ -110,20 +110,22 @@ def generate_report(sales_rep, year):
     It aggregates commissions per Product Line and Month (MM) using the following logic:
 
       For each month in a Sales Rep/Product Line group:
-        - Initialize a cumulative payout variable.
-        - If "Commission tier 2 date" is NULL for that month:
-             commission = sum("Comm Amount tier 1")
-             (And accumulate the deferred sum: sum("Comm tier 2 diff amount"))
-        - If "Commission tier 2 date" equals "{year}-{MM}" for that month:
-             commission = sum("Comm Amount tier 1") + sum("Comm tier 2 diff amount") + (accumulated payout)
-             (Then reset the payout.)
-        - Else:
-             commission = sum("Comm Amount tier 1") + sum("Comm tier 2 diff amount")
-
-    The report DataFrame displays one row per Product Line with monthly columns and a YTD Total.
+        - Fetch the monthly Sales Actual, tier 1 commission, and tier 2 differential.
+        - Accumulate the Sales Actual.
+        - If cumulative sales < threshold:
+             Report commission = tier 1 commission only.
+             Accumulate the deferred differential (tier 2 diff amount).
+        - When cumulative sales reach (or exceed) the threshold for the first time:
+             Report commission = (tier 1 commission + tier 2 differential for the month)
+                                  + (accumulated differential from previous months).
+             Then reset the accumulated differential.
+        - After the threshold is reached, report commission = tier 1 + tier 2 for that month.
+        
+    The final DataFrame displays one row per Product Line with monthly columns and a YTD Total.
     """
     engine = get_db_connection()
 
+    # Determine which sales reps to include.
     if sales_rep == "All":
         try:
             with engine.connect() as conn:
@@ -145,11 +147,14 @@ def generate_report(sales_rep, year):
     try:
         with engine.connect() as conn:
             for rep in all_sales_reps:
+                # For each sales rep, get the distinct product lines in the year.
                 product_lines = get_unique_product_lines(rep, year)
                 for product_line in product_lines:
                     if product_line not in final_report_data:
+                        # Initialize dictionary for each month ("01" through "12") and a Total.
                         final_report_data[product_line] = {str(i).zfill(2): 0 for i in range(1, 13)}
                         final_report_data[product_line]["Total"] = 0
+                        # If a specific sales rep is selected, also fetch the threshold.
                         if sales_rep != "All":
                             threshold_query = """
                                 SELECT "Commission tier threshold"
@@ -160,45 +165,67 @@ def generate_report(sales_rep, year):
                             """
                             threshold_result = conn.execute(
                                 text(threshold_query),
-                                {"sales_rep": sales_rep, "year": year, "product_line": product_line}
+                                {"sales_rep": rep, "year": year, "product_line": product_line}
                             )
                             threshold = threshold_result.scalar() or 0
                             final_report_data[product_line]["Comm Tier Threshold"] = threshold
+                        else:
+                            # If "All" is selected for sales rep, we won’t calculate cumulative sales.
+                            threshold = float('inf')
+                    else:
+                        # If already processed for this product line, fetch the threshold.
+                        threshold = final_report_data[product_line].get("Comm Tier Threshold", float('inf'))
 
+                    # Modify the commission query to also fetch monthly Sales Actual.
                     commission_query = """
                         SELECT "Date MM",
-                               SUM("Comm Amount tier 1") AS tier1_sum,
-                               SUM("Comm tier 2 diff amount") AS tier2_sum,
-                               MAX("Commission tier 2 date") AS tier2_date
+                            SUM("Sales Actual") AS sales_actual,
+                            SUM("Comm Amount tier 1") AS tier1_sum,
+                            SUM("Comm tier 2 diff amount") AS tier2_sum,
+                            MAX("Commission tier 2 date") AS tier2_date
                         FROM harmonised_table
                         WHERE "Sales Rep" = :sales_rep
-                          AND "Date YYYY" = :year
-                          AND "Product Line" = :product_line
+                        AND "Date YYYY" = :year
+                        AND "Product Line" = :product_line
                         GROUP BY "Date MM"
-                        ORDER BY "Date MM"
+                        ORDER BY CAST("Date MM" AS INTEGER)
                     """
+
                     commission_result = conn.execute(
                         text(commission_query),
                         {"sales_rep": rep, "year": year, "product_line": product_line}
                     ).mappings()
-                    
+
+                    # Initialize cumulative variables.
                     payout = 0
+                    cumulative_sales = 0
+                    threshold_applied = False
+
+                    # Process each month's data in order.
                     for row in commission_result.fetchall():
                         month = row["Date MM"]
                         month_str = str(month).zfill(2)
                         tier1_sum = row["tier1_sum"] if row["tier1_sum"] is not None else 0
                         tier2_sum = row["tier2_sum"] if row["tier2_sum"] is not None else 0
-                        tier2_date = row["tier2_date"]
-                        
-                        if tier2_date is None:
-                            commission_amount = tier1_sum
-                            payout += tier2_sum
-                        elif tier2_date == f"{year}-{month_str}":
-                            commission_amount = tier1_sum + tier2_sum + payout
-                            payout = 0
+                        sales_actual = row["sales_actual"] if row["sales_actual"] is not None else 0
+
+                        cumulative_sales += sales_actual
+
+                        if not threshold_applied:
+                            if cumulative_sales < threshold:
+                                # Threshold not reached: report only tier1 commission.
+                                commission_amount = tier1_sum
+                                payout += tier2_sum  # accumulate deferred differential
+                            else:
+                                # This month is the threshold month.
+                                commission_amount = (tier1_sum + tier2_sum) + payout
+                                payout = 0
+                                threshold_applied = True
                         else:
+                            # After threshold has been reached, use full tier2 commission.
                             commission_amount = tier1_sum + tier2_sum
 
+                        # Sum the commission for the product line for this month.
                         final_report_data[product_line][month_str] += commission_amount
                         final_report_data[product_line]["Total"] += commission_amount
 
@@ -208,9 +235,11 @@ def generate_report(sales_rep, year):
     finally:
         engine.dispose()
 
+    # Build the final DataFrame.
     report_df = pd.DataFrame.from_dict(final_report_data, orient="index").reset_index()
     report_df.rename(columns={"index": "Product Line"}, inplace=True)
 
+    # Rename month columns from "01", "02", ... to "Jan", "Feb", etc.
     month_mapping = {
         str(i).zfill(2): month for i, month in enumerate(
             ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1
@@ -218,7 +247,8 @@ def generate_report(sales_rep, year):
     }
     report_df.rename(columns=month_mapping, inplace=True)
 
-    numeric_columns = [col for col in report_df.columns if col not in ["Product Line"]]
+    # Ensure numeric columns are numeric.
+    numeric_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
     for col in numeric_columns:
         report_df[col] = pd.to_numeric(report_df[col], errors="coerce").fillna(0)
 
@@ -240,6 +270,7 @@ def generate_report(sales_rep, year):
         )
 
     return report_df
+
 
 def get_years_for_sales_rep_any():
     """Fetch distinct years for all Sales Reps from the harmonised_table."""
