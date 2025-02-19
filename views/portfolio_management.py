@@ -243,13 +243,18 @@ with tab2:
                 st.session_state.save_initiated = False
 
             if st.button("Save Commission Changes"):
-                # Validate that the commission rates are valid percentages.
-                if edited_df["Commission tier 1 rate"].between(0, 100).all() and \
-                   edited_df["Commission tier 2 rate"].between(0, 100).all():
+                # Validate that every row has a non-empty Sales Rep Name.
+                if edited_df["Sales Rep Name"].isnull().any() or (edited_df["Sales Rep Name"].astype(str).str.strip() == "").any():
+                    st.error("Every row must have a Sales Rep Name. Please complete missing entries.")
+                # Validate that every row has a Commission tier 1 rate.
+                elif edited_df["Commission tier 1 rate"].isnull().any():
+                    st.error("Every row must have a Commission tier 1 rate. Please complete missing entries.")
+                # Validate that commission rates are valid percentages.
+                elif not edited_df["Commission tier 1 rate"].between(0, 100).all() or not edited_df["Commission tier 2 rate"].between(0, 100).all():
+                    st.error("Commission rates must be valid percentages (0 to 100).")
+                else:
                     st.session_state.save_initiated = True
                     st.warning("Are you sure you want to replace the current table with the new data?")
-                else:
-                    st.error("Commission rates must be valid percentages (0 to 100).")
                     
             if st.session_state.save_initiated:
                 if st.button("Yes, Replace Table", key="commission_confirm_button"):

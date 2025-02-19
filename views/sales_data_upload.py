@@ -124,6 +124,20 @@ def get_unique_sales_rep_names():
     finally:
         engine.dispose()
 
+# NEW: Helper function to validate Sales Rep names.
+def check_for_valid_sales_rep(df: pd.DataFrame) -> list:
+    """
+    Check if the names in the raw DataFrame column "Sales Rep Name" are present
+    in the sales_rep_commission_tier table (using the "Sales Rep Name" column).
+    Returns a list of names that are missing.
+    """
+    if "Sales Rep Name" not in df.columns:
+        return []  # or return an error message if this column is required
+    valid_names = set(get_unique_sales_rep_names())
+    df_names = set(df["Sales Rep Name"].dropna().unique())
+    missing_names = list(df_names - valid_names)
+    return missing_names
+
 def sales_data_tab():
     st.title("Sales Data Upload Hub")
 
@@ -223,6 +237,13 @@ def sales_data_tab():
             )
             return
 
+        # NEW: Check for valid Sales Rep names
+        missing_names = check_for_valid_sales_rep(df)
+        if missing_names:
+            st.error("The following sales reps don't have any commission tier setup: " + ", ".join(missing_names))
+            # You can optionally return here to force the user to fix the issue before proceeding:
+            #return
+
         amount_line_issues = []
         if file_type == "QuickBooks":
             amount_line_issues = check_for_amount_line_issues(df)
@@ -270,6 +291,19 @@ def sales_data_tab():
             st.warning("No data available to save. Please upload and process files first.")
             return
 
+        # # NEW: Validate that all Sales Rep names in each file are valid.
+        # invalid_sales_reps = {}
+        # for f_name, (df_data, _) in st.session_state.dataframes.items():
+        #     missing_names = check_for_valid_sales_rep(df_data)
+        #     if missing_names:
+        #         invalid_sales_reps[f_name] = missing_names
+
+        # if invalid_sales_reps:
+        #     st.error("The following sales reps don't have any commission tier setup:")
+        #     for fname, names in invalid_sales_reps.items():
+        #         st.markdown(f"- **File:** {fname} | **Missing Sales Reps:** {', '.join(names)}")
+        #     return
+
         invalid_files = {}
         for f_name, (df_data, _) in st.session_state.dataframes.items():
             blank_details = check_for_blanks_with_details(df_data)
@@ -282,7 +316,7 @@ def sales_data_tab():
                 for row, cols in row_col_details:
                     st.markdown(f"- **File:** {fname} | **Row:** {row} | **Columns:** {', '.join(cols)}")
             return
-
+            
         debug_output = []
         for f_name, (df_data, f_type) in st.session_state.dataframes.items():
             try:
