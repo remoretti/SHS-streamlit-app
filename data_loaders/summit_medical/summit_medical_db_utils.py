@@ -38,6 +38,7 @@ def map_summit_medical_to_harmonised():
             "Net Sales Amount"    AS "Sales Actual",
             "Comm $"    AS "Rev Actual",
             'Summit Medical'           AS "Product Line",
+            'master_summit_medical_sales' AS "Data Source",
             row_hash,
             "Comm Amount tier 1",
             "Comm tier 2 diff amount"
@@ -78,6 +79,7 @@ SELECT
     "Net Sales Amount" AS "Sales Actual",
     "Comm $" AS "Rev Actual",
     'Summit Medical' AS "Product Line",
+    'master_summit_medical_sales' AS "Data Source",
     row_hash,
     "Comm Amount tier 1",
     "Comm tier 2 diff amount"
@@ -157,13 +159,14 @@ def update_harmonised_table(table_name: str):
                 with engine.connect() as conn:
                     # Identify the Product Line
                     product_line = "Summit Medical"
+                    data_source = "master_summit_medical_sales"
 
                     # Delete existing rows for the same product line in harmonised_table
-                    delete_query = text("DELETE FROM harmonised_table WHERE \"Product Line\" = :product_line")
-                    conn.execute(delete_query, {"product_line": product_line})
+                    delete_query = text("""DELETE FROM harmonised_table WHERE "Product Line" = :product_line AND "Data Source" = :data_source""")
+                    conn.execute(delete_query, {"product_line": product_line, "data_source": data_source})
                     conn.commit()
-                    print(f"✅ Deleted existing rows in 'harmonised_table' for Product Line: {product_line}.")
-                    debug_messages.append(f"✅ Deleted existing rows in 'harmonised_table' for Product Line: {product_line}.")
+                    print(f"✅ Deleted existing rows in 'harmonised_table' for Product Line: {product_line} with Data Source {data_source}.")
+                    debug_messages.append(f"✅ Deleted existing rows in 'harmonised_table' for Product Line: {product_line} with Data Source {data_source}.")
 
                     # Append the newly harmonised data
                     harmonised_data.to_sql("harmonised_table", con=engine, if_exists="append", index=False)

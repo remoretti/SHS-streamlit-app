@@ -66,6 +66,21 @@ EXPECTED_COLUMNS = {
         "Date MM",
         "Date YYYY",
         "Sales Rep Name"
+    ],
+    "InspeKtor": [ # Don't count index column!
+        #"Sales Rep",
+        #"Name",
+        "Company",
+        "Date",
+        "Document Number",
+        "Customer:Project",
+        "Item: Name",
+        "Description",
+        "Quantity",
+        "Total",
+        "Commission %",
+        "Formula",
+        "Ship To"
     ]
 }
 

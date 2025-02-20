@@ -78,7 +78,7 @@ def update_harmonised_table(table_name: str):
     Harmonise the specific table (for QuickBooks) and update the harmonised_table.
     
     Because QuickBooks rows have dynamic product lines, we first delete all rows in harmonised_table 
-    that came from master_quickbooks_sales (using row_hash as the link), and then append the newly 
+    that came from master_quickbooks_sales (using "Data Source" as the link), and then append the newly 
     mapped data.
     
     Returns a list of debug messages.
@@ -91,12 +91,15 @@ def update_harmonised_table(table_name: str):
             engine = get_db_connection()
             try:
                 with engine.connect() as conn:
-                    # Delete existing harmonised_table rows that came from QuickBooks.
+                    # Define the data source value for QuickBooks ingestion
+                    data_source = "master_quickbooks_sales"
+                    
+                    # Delete existing harmonised_table rows that came from QuickBooks using the Data Source
                     delete_query = text("""
                         DELETE FROM harmonised_table 
-                        WHERE row_hash IN (SELECT row_hash FROM master_quickbooks_sales)
+                        WHERE "Data Source" = :data_source
                     """)
-                    conn.execute(delete_query)
+                    conn.execute(delete_query, {"data_source": data_source})
                     conn.commit()
                     debug_messages.append("✅ Deleted existing harmonised_table rows corresponding to master_quickbooks_sales.")
 
@@ -112,6 +115,7 @@ def update_harmonised_table(table_name: str):
     
     return debug_messages
 
+
 def map_quickbooks_to_harmonised():
     """
     Map master_quickbooks_sales data to the harmonised_table structure.
@@ -126,6 +130,7 @@ def map_quickbooks_to_harmonised():
       - "Margin"        from QuickBooks becomes "Rev Actual"
     
     Additional calculations for commission amounts and SHS Margin are performed.
+    A literal column "Data Source" is added with the value 'master_quickbooks_sales'.
     """
     engine = get_db_connection()
     try:
@@ -208,6 +213,7 @@ SELECT
     c."Comm Amount tier 1",
     c."Comm tier 2 diff amount",
     t2."Commission tier 2 date",
+    'master_quickbooks_sales' AS "Data Source",
     c.row_hash
 FROM commission_calculations AS c
 LEFT JOIN tier_2_eligibility AS t2 
