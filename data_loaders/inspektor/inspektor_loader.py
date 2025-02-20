@@ -47,6 +47,7 @@ def load_excel_file_inspektor(filepath: str) -> pd.DataFrame:
     
     # 2. Drop rows where "Name" is empty (handles NaN and empty strings).
     df = df.dropna(subset=["Name"])
+    df["Name"] = df["Name"].astype(str).str.replace(r'\s+', ' ', regex=True).str.strip()
     df = df[df["Name"].astype(str).str.strip() != ""]
     
     # 3. Convert "Date" from m/d/YYYY to YYYY-MM-DD.
