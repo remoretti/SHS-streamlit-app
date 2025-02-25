@@ -163,7 +163,8 @@ def update_harmonised_table(table_name: str):
 
                     # Delete existing rows for the same product line in harmonised_table
                     delete_query = text("""DELETE FROM harmonised_table WHERE "Product Line" = :product_line AND "Data Source" = :data_source""")
-                    conn.execute(delete_query, {"product_line": product_line})
+                    #conn.execute(delete_query, {"product_line": product_line})
+                    conn.execute(delete_query, {"product_line": product_line, "data_source": data_source})
                     conn.commit()
                     print(f"✅ Deleted existing rows in 'harmonised_table' for Product Line: {product_line} with Data Source: {data_source}.")
                     debug_messages.append(f"✅ Deleted existing rows in 'harmonised_table' for Product Line: {product_line} with Data Source: {data_source}.")
