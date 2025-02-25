@@ -38,16 +38,7 @@ def fetch_business_objective_data(selected_year):
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
-            # Fetch unique product lines
-            product_lines_query = """
-                SELECT DISTINCT "Product line" 
-                FROM sales_rep_business_objective
-                WHERE "Year" = %s
-                ORDER BY "Product line"
-            """
-            product_lines = pd.read_sql_query(product_lines_query, conn, params=(selected_year,))
-
-            # Fetch sales reps per product line
+            # Fetch unique product lines and sales reps per product line
             sales_rep_query = """
                 SELECT DISTINCT "Product line", "Sales Rep name"
                 FROM sales_rep_business_objective
@@ -72,45 +63,58 @@ def fetch_business_objective_data(selected_year):
             """
             objectives = pd.read_sql_query(objective_query, conn, params=(selected_year,))
 
+        # If there are no sales reps, return an empty DataFrame with all expected columns.
+        if sales_reps.empty:
+            columns = [
+                "Product line", "Sales Rep name", "Commission tier threshold",
+                "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December",
+                "Annual Objective"
+            ]
+            return pd.DataFrame(columns=columns)
+
         # Merge data to create the full DataFrame
         full_df = sales_reps.merge(commission_tiers, on=["Product line", "Sales Rep name"], how="left")
         for month in range(1, 13):
-            month_name = pd.to_datetime(f"{month}", format="%m").strftime("%B")  # Convert month number to name
+            month_name = pd.to_datetime(f"{month}", format="%m").strftime("%B")
             month_data = objectives[objectives["Month"] == month].rename(columns={"Objective": month_name})
-            full_df = full_df.merge(month_data[["Product line", "Sales Rep name", month_name]], 
-                                    on=["Product line", "Sales Rep name"], 
-                                    how="left")
-        # Calculate the Annual Objective
+            full_df = full_df.merge(
+                month_data[["Product line", "Sales Rep name", month_name]], 
+                on=["Product line", "Sales Rep name"], 
+                how="left"
+            )
+        # Calculate the Annual Objective (if all month columns are missing, this will yield 0)
         full_df["Annual Objective"] = full_df.loc[:, "January":"December"].sum(axis=1, skipna=True)
 
         # Format numeric columns with $ symbol
-        numeric_columns = ["Commission tier threshold", "January", "February", "March", "April", "May", "June",
-                           "July", "August", "September", "October", "November", "December", "Annual Objective"]
+        numeric_columns = [
+            "Commission tier threshold", "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December", "Annual Objective"
+        ]
         for col in numeric_columns:
             if col in full_df.columns:
                 full_df[col] = full_df[col].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else "")
 
-        # Sort by Product Line
+        # Sort by Product line
         full_df = full_df.sort_values(by=["Product line", "Sales Rep name"]).reset_index(drop=True)
 
         # Add Sub-Total Rows
         rows_with_subtotals = []
         for product_line, group in full_df.groupby("Product line"):
-            rows_with_subtotals.append(group)  # Add the group
+            rows_with_subtotals.append(group)
             # Calculate sub-totals for numeric columns
             subtotal = group.loc[:, "January":"December"].applymap(
-                lambda x: float(x.replace('$', '').replace(',', ''))).sum()
+                lambda x: float(x.replace('$', '').replace(',', '')) if isinstance(x, str) else 0
+            ).sum()
             subtotal["Annual Objective"] = subtotal.sum()
             subtotal_row = pd.Series({
                 "Product line": product_line,
                 "Sales Rep name": "Sub-Total",
                 **{col: f"${subtotal[col]:,.2f}" for col in subtotal.index}
             })
-            rows_with_subtotals.append(pd.DataFrame([subtotal_row]))  # Add the subtotal row
+            rows_with_subtotals.append(pd.DataFrame([subtotal_row]))
 
-        # Concatenate the rows with sub-totals
         final_df = pd.concat(rows_with_subtotals, ignore_index=True)
-
         return final_df
 
     except Exception as e:
@@ -118,6 +122,7 @@ def fetch_business_objective_data(selected_year):
         return pd.DataFrame()
     finally:
         engine.dispose()
+
 
 def update_business_objective_data(df, year):
     """Update the sales_rep_business_objective and sales_rep_commission_tier_threshold tables."""
@@ -217,95 +222,82 @@ def get_unique_product_lines_service_to_product():
     finally:
         engine.dispose()
 
+
 # ----------------- Streamlit UI -----------------
 st.title("Business Objective Editor")
-
 col1, col2 = st.columns([1, 1])
 
-# Instead of asking the user to enter a year, we assume it is 2024.
-selected_year = "2024"
+# Hardcoded year
+selected_year = "2025"
 with col1:
     st.markdown(f"**Year:** {selected_year}")
 
 df = fetch_business_objective_data(selected_year)
 
-if not df.empty:
-    # Compute the Annual Objective Total from sub-totals.
-    sub_totals = df[df["Sales Rep name"] == "Sub-Total"]
-    annual_total = sub_totals["Annual Objective"].apply(
-        lambda x: float(x.replace("$", "").replace(",", ""))
-    ).sum()
+# Initialize editing state if not already set.
+if "editing" not in st.session_state:
+    st.session_state.editing = False
 
-    with col2:
-        st.markdown(
-            f"""
-            <div style="text-align: right; font-size: 1.5em; font-weight: bold;">
-                Annual Objective Total: ${annual_total:,.2f}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    # Initialize editing state if not already set.
-    if "editing" not in st.session_state:
-        st.session_state.editing = False
-
-    if not st.session_state.editing:
-        # Read-only mode: show the styled DataFrame with sub-totals.
+if not st.session_state.editing:
+    if df.empty:
+        st.warning(f"No data available for the selected year: {selected_year}.")
+    else:
+        # Display read-only preview with sub-totals if data exists
         styled_df = df.style.apply(highlight_subtotals_readonly, axis=1)
         st.write("Preview with Sub-Totals Highlighted (Read-Only):")
-        if st.button("Edit Data"):
-            st.session_state.editing = True
         st.write(styled_df, unsafe_allow_html=True, use_container_width=True)
-    else:
-        # Editing mode: remove Sub-Total rows.
-        editable_df = remove_subtotals_for_editing(df)
-
-        # Fetch unique Sales Rep names from the commission tier table for the drop-down.
-        sales_rep_options = get_unique_sales_reps_commission_tier()
-        product_line_options = get_unique_product_lines_service_to_product()
-
-        # Configure the "Sales Rep name" column to be a selectbox using the new Streamlit data editor column config API.
-        col_config = {
-            "Sales Rep name": st.column_config.SelectboxColumn(
-                "Sales Rep name",
-                options=sales_rep_options,
-                help="Select a Sales Rep name from the list"
-            ),
-            "Product line": st.column_config.SelectboxColumn(
-                "Product line",
-                options=product_line_options,
-                help="Select a Product line from the list"
-            )
-        }
-
-        st.write("Editable DataFrame (Sub-Totals Removed):")
-        edited_df = st.data_editor(
-            editable_df,
-            use_container_width=True,
-            num_rows="dynamic",
-            hide_index=True,
-            key="business_objective_editor",
-            column_config=col_config
-        )
-
-        # Save changes with confirmation logic.
-        if "save_initiated" not in st.session_state:
-            st.session_state.save_initiated = False
-
-        if st.button("Save Changes"):
-            st.session_state.save_initiated = True
-            st.warning("Are you sure you want to replace the current data with the new changes?")
-
-        if st.session_state.save_initiated:
-            if st.button("Yes, Replace Table"):
-                update_business_objective_data(edited_df, selected_year)
-                st.session_state.save_initiated = False  # Reset state after save
-                st.session_state.editing = False  # Return to read-only mode
-                st.rerun()  # Reload the page to show updated data
-
-        if st.button("Cancel Editing"):
-            st.session_state.editing = False
-            st.rerun()
+    
+    if st.button("Edit Data"):
+        st.session_state.editing = True
 else:
-    st.warning(f"No data available for the selected year: {selected_year}.")
+    # Editing mode: remove Sub-Total rows.
+    editable_df = remove_subtotals_for_editing(df)
+
+    # Fetch unique Sales Rep names for the drop-down.
+    sales_rep_options = get_unique_sales_reps_commission_tier()
+    product_line_options = get_unique_product_lines_service_to_product()
+
+    col_config = {
+        "Sales Rep name": st.column_config.SelectboxColumn(
+            "Sales Rep name",
+            options=sales_rep_options,
+            help="Select a Sales Rep name from the list"
+        ),
+        "Product line": st.column_config.SelectboxColumn(
+            "Product line",
+            options=product_line_options,
+            help="Select a Product line from the list"
+        )
+    }
+
+    st.write("Editable DataFrame (Sub-Totals Removed):")
+    edited_df = st.data_editor(
+        editable_df,
+        use_container_width=True,
+        num_rows="dynamic",
+        hide_index=True,
+        key="business_objective_editor",
+        column_config=col_config
+    )
+
+    # Save changes with confirmation logic.
+    if "save_initiated" not in st.session_state:
+        st.session_state.save_initiated = False
+
+    if st.button("Save Changes"):
+        st.session_state.save_initiated = True
+        st.warning("Are you sure you want to replace the current data with the new changes?")
+
+    if st.session_state.save_initiated:
+        if st.button("Yes, Replace Table"):
+            update_business_objective_data(edited_df, selected_year)
+            st.session_state.save_initiated = False  # Reset state after save
+            st.session_state.editing = False  # Return to read-only mode
+            st.rerun()
+
+    if st.button("Cancel Editing"):
+        st.session_state.editing = False
+        st.rerun()
+
+    else:
+        st.warning(f"No data available for the selected year: {selected_year}.")
