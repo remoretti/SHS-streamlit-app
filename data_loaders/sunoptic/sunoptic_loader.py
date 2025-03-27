@@ -83,7 +83,7 @@ def load_excel_file_sunoptic(filepath: str) -> pd.DataFrame:
     
     # 5. Convert "Ship Qty" to integers
     if "Ship Qty" in df.columns:
-        df["Ship Qty"] = pd.to_numeric(df["Ship Qty"], errors='coerce').fillna(0).astype('int64')
+        df["Ship Qty"] = pd.to_numeric(df["Ship Qty"], errors='coerce').fillna(0).round(2)
 
 
     # ✅ Load the master data from the database
