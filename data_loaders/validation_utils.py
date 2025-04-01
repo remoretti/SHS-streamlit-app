@@ -114,6 +114,7 @@ EXPECTED_COLUMNS = {
 #     actual = set(df.columns)
 #     missing = list(expected - actual)
 #     return (len(missing) == 0, missing)
+
 def validate_file_format(df: pd.DataFrame, file_type: str):
     """
     Checks if the DataFrame (with normalized column names) contains all expected columns for the given file type.
