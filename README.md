@@ -206,6 +206,7 @@ The application is currently deployed on AWS with a containerized architecture. 
 - **AWS Application Load Balancer**: For load balancing and routing traffic to the ECS services
 - **AWS IAM**: Identity and access management for service roles and permissions
 - **AWS CodePipeline/CodeBuild**: CI/CD pipeline for automated builds and deployments
+- **AWS EC2**: Bastion for RDS connection
 
 ### Containerized Architecture
 

@@ -42,7 +42,8 @@ def clean_extracted_data(raw_df: pd.DataFrame) -> pd.DataFrame:
 def format_table_logic_and_update_df(cleaned_df: pd.DataFrame):
     """
     Apply custom row‐dropping and date‐extraction logic, then rename columns.
-    Finally, insert the 4 new calculation columns after 'Comm $'.
+    For PDFs, Revenue Recognition Date fields are populated from the PDF data.
+    Commission Date fields will be added later in sales_data_upload.py.
     """
     date = None
     date_mm = None
@@ -89,14 +90,19 @@ def format_table_logic_and_update_df(cleaned_df: pd.DataFrame):
     cleaned_df.reset_index(drop=True, inplace=True)
 
     # ----------------------
-    # Insert columns 6..11 at the end
-    for i in range(6, 12):
+    # Insert columns 6..14 at the end (extra columns for Commission Date)
+    for i in range(6, 15):
         cleaned_df[f"Column_{i}"] = None
 
-    # Fill columns 9..11 with the extracted date
-    cleaned_df["Column_9"] = date
-    cleaned_df["Column_10"] = date_mm
-    cleaned_df["Column_11"] = date_yyyy
+    # Fill columns 9..11 with the extracted date for Revenue Recognition
+    cleaned_df["Column_9"] = date  # Revenue Recognition Date
+    cleaned_df["Column_10"] = date_mm  # Revenue Recognition Date MM
+    cleaned_df["Column_11"] = date_yyyy  # Revenue Recognition Date YYYY
+
+    # Leave Commission Date columns empty to be populated by the sales_data_upload.py
+    cleaned_df["Column_12"] = ""  # Commission Date
+    cleaned_df["Column_13"] = ""  # Commission Date MM 
+    cleaned_df["Column_14"] = ""  # Commission Date YYYY
 
     # ----------------------
     # If Column_1 is populated, fill Column_7 with next row's Column_0
@@ -125,20 +131,23 @@ def format_table_logic_and_update_df(cleaned_df: pd.DataFrame):
     cleaned_df.reset_index(drop=True, inplace=True)
 
     # ----------------------
-    # Rename columns to final names
+    # Rename columns to final names with updated Revenue Recognition Date fields and Commission Date fields
     cleaned_df.columns = [
-        "Client Name",       # Column_0
-        "Invoice #",         # Column_1
-        "Item ID",           # Column_2
-        "Net Sales Amount",  # Column_3
-        "Comm Rate",         # Column_4
-        "Comm $",            # Column_5
-        "Sales Rep Code",    # Column_6
-        "State",             # Column_7
-        "ZIP Code",          # Column_8
-        "Date",              # Column_9
-        "Date MM",           # Column_10
-        "Date YYYY"          # Column_11
+        "Client Name",           # Column_0
+        "Invoice #",             # Column_1
+        "Item ID",               # Column_2
+        "Net Sales Amount",      # Column_3
+        "Comm Rate",             # Column_4
+        "Comm $",                # Column_5
+        "Sales Rep Code",        # Column_6
+        "State",                 # Column_7
+        "ZIP Code",              # Column_8
+        "Revenue Recognition Date",      # Column_9
+        "Revenue Recognition Date MM",   # Column_10
+        "Revenue Recognition Date YYYY", # Column_11
+        "Commission Date",              # Column_12
+        "Commission Date MM",           # Column_13
+        "Commission Date YYYY"          # Column_14
     ]
 
     # ----------------------
@@ -152,7 +161,6 @@ def format_table_logic_and_update_df(cleaned_df: pd.DataFrame):
 
     # Initialize them
     cleaned_df["Sales Rep Name"] = ""         
-    #cleaned_df["SalRep %"] = 0.35
 
     # Convert "Comm $" to numeric (remove commas if any) for calculations
     cleaned_df["Comm $"] = (
@@ -162,23 +170,12 @@ def format_table_logic_and_update_df(cleaned_df: pd.DataFrame):
     )
     cleaned_df["Comm $"] = pd.to_numeric(cleaned_df["Comm $"], errors="coerce")
 
-    # SalRep Comm Amt = Comm $ * SalRep %
-    #cleaned_df["SalRep Comm Amt"] = cleaned_df["Comm $"] * cleaned_df["SalRep %"]
-
-    # SHS Margin = Comm $ - SalRep Comm Amt
-    #cleaned_df["SHS Margin"] = cleaned_df["Comm $"] - cleaned_df["SalRep Comm Amt"]
-
     # ----------------------
-    # FINAL STEP: Transform these columns to two-decimal strings with no comma
-    # EXACT columns you requested:
-    #   "Net Sales Amount", "Comm Rate", "Comm %", "SalRep %", "SalRep Comm Amt", "SHS Margin"
+    # Format numeric columns
     columns_to_format = [
         "Net Sales Amount",
         "Comm Rate",
         "Comm %",
-        #"SalRep %",
-        #"SalRep Comm Amt",
-        #"SHS Margin"
     ]
     for col in columns_to_format:
         if col in cleaned_df.columns:
@@ -190,8 +187,6 @@ def format_table_logic_and_update_df(cleaned_df: pd.DataFrame):
             )
             # Convert to float
             cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors="coerce")
-            # Format with 2 decimals, no thousand separator
-            #cleaned_df[col] = cleaned_df[col].map(lambda x: f"{x:.2f}" if pd.notnull(x) else "")
             # Keep them numeric and just round them to 2 decimals:
             cleaned_df[col] = cleaned_df[col].round(2)
 
@@ -205,6 +200,9 @@ def load_pdf_file_summit_medical(filepath: str) -> pd.DataFrame:
       3) Drop unneeded rows & parse date,
       4) Insert new columns after 'Comm $',
       5) Return the final DataFrame.
+      
+    For PDF files, Revenue Recognition Date fields are populated from the PDF content,
+    while Commission Date fields are left empty to be filled by sales_data_upload.py.
     """
     # Step 1: Extract raw data
     raw_data = extract_tables_from_pdf(filepath)
@@ -213,3 +211,172 @@ def load_pdf_file_summit_medical(filepath: str) -> pd.DataFrame:
     # Step 3: Format table & add calculations
     processed_data, _, _, _ = format_table_logic_and_update_df(cleaned_data)
     return processed_data
+
+def load_excel_file_summit_medical(filepath: str, year: str = None, month: str = None, 
+                             rev_year: str = None, rev_month: str = None) -> pd.DataFrame:
+    """
+    Load and transform a Summit Medical Excel file into a pandas DataFrame.
+    
+    Args:
+        filepath: Path to the Excel file
+        year: Selected Commission Date year
+        month: Selected Commission Date month
+        rev_year: Selected Revenue Recognition year
+        rev_month: Selected Revenue Recognition month
+        
+    Returns:
+        Transformed DataFrame with standardized columns
+    
+    Note:
+        Excel column mapping to standardized format:
+        - Row Labels -> Client Name
+        - Invoice # -> Invoice #
+        - Item -> Item ID
+        - Sum of Net Sales Amount -> Net Sales Amount
+        - CommRate -> Comm Rate
+        - Sum of Comm $ -> Comm $
+        - St -> State
+        - Zip Code -> ZIP Code
+    """
+    # Check if Commission Date year and month are provided
+    if not year or not month:
+        raise ValueError("Commission Date year and month must be provided for Summit Medical Excel files")
+    
+    # Convert month names to numbers (1-12)
+    month_map = {
+        "January": "01", "February": "02", "March": "03", "April": "04",
+        "May": "05", "June": "06", "July": "07", "August": "08",
+        "September": "09", "October": "10", "November": "11", "December": "12"
+    }
+    month_num = month_map.get(month)
+    if not month_num:
+        raise ValueError(f"Invalid Commission Date month: {month}")
+    
+    # Format Commission Date string
+    commission_date = f"{year}-{month_num}"
+    
+    # Process Revenue Recognition date if provided
+    has_revenue_recognition = rev_year is not None and rev_month is not None
+    if has_revenue_recognition:
+        rev_month_num = month_map.get(rev_month)
+        if not rev_month_num:
+            raise ValueError(f"Invalid Revenue Recognition month: {rev_month}")
+        revenue_recognition_date = f"{rev_year}-{rev_month_num}"
+    else:
+        # If no revenue recognition date provided, leave it empty
+        revenue_recognition_date = ""
+        rev_month_num = ""
+        rev_year = ""
+    
+    try:
+        # First attempt - try to read with specified dtype for text columns
+        df = pd.read_excel(
+            filepath, 
+            dtype={
+                'Invoice #': str,
+                'ZIP Code': str
+            }
+        )
+    except Exception:
+        # Fallback - read without dtype specification
+        df = pd.read_excel(filepath)
+        # Then fix the columns manually
+        if 'Invoice #' in df.columns:
+            df['Invoice #'] = df['Invoice #'].apply(lambda x: str(int(x)) if pd.notnull(x) else '')
+        if 'ZIP Code' in df.columns:
+            df['ZIP Code'] = df['ZIP Code'].apply(lambda x: str(int(x)) if pd.notnull(x) else '')
+    
+    # Run validation on the raw DataFrame
+    is_valid, missing = validate_file_format(df, "Summit Medical Excel")
+    if not is_valid:
+        raise ValueError(f"Raw file format invalid. Missing columns: {', '.join(missing)}")
+    
+    # NEW: Forward fill Client Name column before further processing
+    # This will fill NaN values with the last valid value encountered
+    if "Row Labels" in df.columns:
+        # First convert any empty strings to NaN to ensure they get filled
+        df["Row Labels"] = df["Row Labels"].replace('', pd.NA)
+        # Then use forward fill to propagate the last valid value
+        df["Row Labels"] = df["Row Labels"].ffill()
+    
+    # Drop rows with empty values in critical columns
+    df = df.dropna(subset=["St", "ZIP Code", "Invoice #", "Item", 
+                           "CommRate"], 
+                  how='all')
+    
+    # Format columns to match PDF version
+    
+    # 1. Fix text columns that might have been interpreted as numbers
+    # Invoice # as text - handle float conversion if needed
+    if "Invoice #" in df.columns:
+        df["Invoice #"] = df["Invoice #"].apply(
+            lambda x: str(int(float(x))) if pd.notnull(x) and not isinstance(x, str) else str(x)
+        ).str.strip()
+    
+    # ZIP Code as text - handle float conversion if needed
+    if "ZIP Code" in df.columns:
+        df["ZIP Code"] = df["ZIP Code"].apply(
+            lambda x: str(int(float(x))) if pd.notnull(x) and not isinstance(x, str) else str(x)
+        ).str.strip()
+    
+    # State as text
+    if "St" in df.columns:
+        df["St"] = df["St"].astype(str).str.strip()
+    
+    # 2. Convert numeric columns
+    numeric_columns = ["CommRate", "Sum of Net Sales Amount", "Sum of Comm $"]
+    for col in numeric_columns:
+        if col in df.columns:
+            # Remove any currency symbols or thousand separators
+            if df[col].dtype == object:  # If it's already a string
+                df[col] = df[col].str.replace('$', '', regex=False).str.replace(',', '', regex=False)
+            # Convert to numeric and round to 2 decimals
+            df[col] = pd.to_numeric(df[col], errors='coerce').round(2)
+    
+    # Rename columns to match standardized format
+    column_mapping = {
+        "Row Labels": "Client Name",
+        "Invoice #": "Invoice #",  # Same name, no change needed
+        "Item": "Item ID",
+        "Sum of Net Sales Amount": "Net Sales Amount",
+        "CommRate": "Comm Rate",
+        "Sum of Comm $": "Comm $",
+        "St": "State",
+        "ZIP Code": "ZIP Code"
+    }
+    df = df.rename(columns=column_mapping)
+    
+    # Add Revenue Recognition Date columns
+    df["Revenue Recognition Date"] = revenue_recognition_date
+    df["Revenue Recognition Date MM"] = rev_month_num
+    df["Revenue Recognition Date YYYY"] = rev_year
+    
+    # Add Commission Date columns populated with user-selected values
+    df["Commission Date"] = commission_date
+    df["Commission Date MM"] = month_num
+    df["Commission Date YYYY"] = year
+    
+    # Add Sales Rep Code column
+    df["Sales Rep Code"] = "Streamline Hospital Services, LLC"
+    
+    # Add Sales Rep Name column (to be enriched later)
+    df["Sales Rep Name"] = ""
+    
+    # Ensure all required columns exist in the output
+    expected_columns = ["Client Name", "Invoice #", "Item ID", "Net Sales Amount", 
+                        "Comm Rate", "Comm $", "Sales Rep Code", "State", 
+                        "ZIP Code", "Revenue Recognition Date", "Revenue Recognition Date MM", "Revenue Recognition Date YYYY", 
+                        "Sales Rep Name", "Commission Date", "Commission Date MM", "Commission Date YYYY"]
+    
+    for col in expected_columns:
+        if col not in df.columns:
+            df[col] = None
+
+    # Final formatting to ensure consistency
+    # Client Name as text - ensure no NaN values remain
+    df["Client Name"] = df["Client Name"].fillna("").astype(str).str.strip()
+    # Item ID as text
+    df["Item ID"] = df["Item ID"].astype(str).str.strip()
+
+    # Reorder columns to match standard format
+    return df[expected_columns]

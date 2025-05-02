@@ -38,108 +38,89 @@ def get_unique_sales_reps():
 def get_product_lines_with_friendly_names():
     """Fetch product lines and map them to user-friendly names."""
     query = """
-        SELECT table_name 
-        FROM information_schema.tables 
+        SELECT table_name
+        FROM information_schema.tables
         WHERE table_name LIKE 'master\_%\_sales'
-    """
+        """
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
             result = conn.execute(text(query))
             table_names = [row[0] for row in result.fetchall()]
+            
         def format_product_line_name(table_name):
             product_line = re.sub(r"^master_|_sales$", "", table_name)
             return f"{product_line.replace('_', ' ').title()} Commission Report"
-        return {table: format_product_line_name(table) for table in table_names}
+            
+        # Create the mapping dictionary
+        product_line_map = {table: format_product_line_name(table) for table in table_names}
+        
+        # Sort the dictionary by the friendly names (values)
+        sorted_product_line_map = dict(sorted(product_line_map.items(), key=lambda item: item[1]))
+        
+        return sorted_product_line_map
     except Exception as e:
         st.error(f"Error fetching product lines from tables: {e}")
         return {}
     finally:
         engine.dispose()
 
-# def fetch_table_data(product_line, selected_sales_reps):
-#     """Fetch sales data for the selected product line and sales reps."""
-#     table_name = product_line  # The selected table name
-#     # Use the correct column name based on your schema:
-#     sales_rep_column = "Sales Rep Name"  
-
-#     # Construct the filter query for sales reps.
-#     sales_rep_filter = " OR ".join([f'"{sales_rep_column}" = :rep{i}' for i in range(len(selected_sales_reps))])
-#     ordering_column = get_valid_ordering_column(table_name) or sales_rep_column
-
-#     query = f"""
-#         SELECT *
-#         FROM {table_name}
-#         WHERE ({sales_rep_filter})
-#         ORDER BY "{ordering_column}", "{sales_rep_column}"
-#     """
-#     params = {f"rep{i}": rep for i, rep in enumerate(selected_sales_reps)}
-
-#     engine = get_db_connection()
-#     try:
-#         with engine.connect() as conn:
-#             result = conn.execute(text(query), params)
-#             df = pd.DataFrame(result.fetchall(), columns=result.keys())
-#         # Exclude specific columns if they exist.
-#         columns_to_exclude = ["row_hash", "SteppingStone", "Margin"]
-#         df = df.drop(columns=[col for col in columns_to_exclude if col in df.columns], errors="ignore")
-#         return df
-#     except Exception as e:
-#         st.error(f"Error fetching data from table '{table_name}': {e}")
-#         return pd.DataFrame()
-#     finally:
-#         engine.dispose()
 def fetch_table_data(product_line, selected_sales_reps):
     """Fetch sales data for the selected product line and sales reps."""
     table_name = product_line  # The selected table name
     # Use the correct column name based on your schema:
-    sales_rep_column = "Sales Rep Name"  
-
+    sales_rep_column = "Sales Rep Name"
+    
+    # Check if selected_sales_reps list is empty
+    if not selected_sales_reps:
+        # Return an empty DataFrame without querying the database
+        return pd.DataFrame()
+    
     # Construct the filter query for sales reps.
     sales_rep_filter = " OR ".join([f'"{sales_rep_column}" = :rep{i}' for i in range(len(selected_sales_reps))])
+    
+    # Get the valid ordering column
     ordering_column = get_valid_ordering_column(table_name) or sales_rep_column
-
+    
+    # Construct the query with the WHERE clause only if there are sales reps to filter by
     query = f"""
         SELECT *
         FROM {table_name}
         WHERE ({sales_rep_filter})
         ORDER BY "{ordering_column}", "{sales_rep_column}"
     """
+    
     params = {f"rep{i}": rep for i, rep in enumerate(selected_sales_reps)}
-
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
+            # Check if the table exists and has any data
+            table_check_query = text(f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = :table_name)")
+            table_exists = conn.execute(table_check_query, {"table_name": table_name}).scalar()
+            
+            if not table_exists:
+                return pd.DataFrame()
+                
+            # Check if there's any data in the table
+            data_check_query = text(f"SELECT EXISTS (SELECT 1 FROM {table_name} LIMIT 1)")
+            has_data = conn.execute(data_check_query).scalar()
+            
+            if not has_data:
+                return pd.DataFrame()
+            
+            # Execute the main query if the table exists and has data
             result = conn.execute(text(query), params)
             df = pd.DataFrame(result.fetchall(), columns=result.keys())
-        
-        # Exclude specific columns if they exist.
-        columns_to_exclude = ["row_hash", "SteppingStone", "Margin"]
-        df = df.drop(columns=[col for col in columns_to_exclude if col in df.columns], errors="ignore")
-        
-        # Special handling for Sunoptic table - reorder columns
-        if table_name == "master_sunoptic_sales" and "Invoice Date" in df.columns:
-            # Check if the Commission Date columns exist
-            if "Commission Date YYYY" in df.columns and "Commission Date MM" in df.columns:
-                # Get all columns in their current order
-                all_columns = df.columns.tolist()
-                
-                # Remove the Commission Date columns from their current positions
-                all_columns.remove("Commission Date YYYY")
-                all_columns.remove("Commission Date MM")
-                
-                # Find the position of Invoice Date
-                invoice_date_pos = all_columns.index("Invoice Date")
-                
-                # Insert the Commission Date columns after Invoice Date
-                all_columns.insert(invoice_date_pos + 1, "Commission Date YYYY")
-                all_columns.insert(invoice_date_pos + 2, "Commission Date MM")
-                
-                # Reorder the DataFrame columns
-                df = df[all_columns]
-        
-        return df
+            
+            # Exclude specific columns if they exist.
+            columns_to_exclude = ["row_hash", "SteppingStone", "Margin"]
+            df = df.drop(columns=[col for col in columns_to_exclude if col in df.columns], errors="ignore")
+            return df
     except Exception as e:
+        # More specific error handling for empty tables
+        if "syntax error at or near" in str(e) and "WHERE ()" in str(e):
+            # This is the empty WHERE clause error
+            return pd.DataFrame()
         st.error(f"Error fetching data from table '{table_name}': {e}")
         return pd.DataFrame()
     finally:
@@ -200,15 +181,16 @@ if selected_sales_rep and selected_product_line:
         selected_sales_reps = sales_reps[1:]  # Exclude "All"
     else:
         selected_sales_reps = [selected_sales_rep]
-
+    
     # Fetch filtered data.
     sales_history_df = fetch_table_data(selected_product_line, selected_sales_reps)
+    
     # Format date columns if present.
-    if "Date YYYY" in sales_history_df.columns:
+    if not sales_history_df.empty and "Date YYYY" in sales_history_df.columns:
         sales_history_df["Date YYYY"] = sales_history_df["Date YYYY"].apply(lambda x: str(int(x)))
-    if "Date MM" in sales_history_df.columns:
+    if not sales_history_df.empty and "Date MM" in sales_history_df.columns:
         sales_history_df["Date MM"] = sales_history_df["Date MM"].apply(lambda x: f"{int(x):02d}")
-
+    
     # Display the DataFrame.
     if not sales_history_df.empty:
         # Convert "Num" column to plain text if the selected data source is QuickBooks Commission Report.
@@ -218,4 +200,4 @@ if selected_sales_rep and selected_product_line:
         st.subheader(f"Sales Data Source: {selected_product_line_display}")
         st.dataframe(sales_history_df, use_container_width=True, height=600, hide_index=True)
     else:
-        st.warning(f"No data available for the selected criteria in '{selected_product_line_display}'.")
+        st.info(f"No data available for the selected sales representative(s) in '{selected_product_line_display}'. The table may be empty or no matching records were found.")

@@ -18,31 +18,31 @@ def get_db_connection():
 
 def generate_row_hash(row: pd.Series) -> str:
     """Generate a hash for identifying unique rows."""
-    columns_to_hash = ["Invoice ID", "Item ID", "Sales Rep Name", "Revenue Recognition Date", "Line Amount", "Ship Qty"]
+    columns_to_hash = ["Customer Number", "Invoice Number", "Sales Rep Name", "Revenue Recognition Date", "Extension", "Item Code"]
     row_data = ''.join([str(row[col]) for col in columns_to_hash if col in row]).encode('utf-8')
     return hashlib.sha256(row_data).hexdigest()
 
-def map_sunoptic_to_harmonised():
+def map_novo_to_harmonised():
     """
-    Map Sunoptic data from the 'master_sunoptic_sales' table to the harmonised_table structure.
+    Map Novo data from the 'master_novo_sales' table to the harmonised_table structure.
     
     Mapping logic:
-      - Join master_sunoptic_sales with commission rates from sales_rep_commission_tier.
+      - Join master_novo_sales with commission rates from sales_rep_commission_tier.
       - Calculate:
-            "Comm Amount tier 1" = "Commission $" * "Commission tier 1 rate"
-            "Comm tier 2 diff amount" = ("Commission $" * "Commission tier 2 rate") - ("Commission $" * "Commission tier 1 rate")
+            "Comm Amount tier 1" = "Commission Amount" * "Commission tier 1 rate"
+            "Comm tier 2 diff amount" = ("Commission Amount" * "Commission tier 2 rate") - ("Commission Amount" * "Commission tier 1 rate")
       - Select and rename columns as follows:
-            "Commission Date"       AS "Commission Date",
-            "Commission Date YYYY"  AS "Commission Date YYYY",
-            "Commission Date MM"    AS "Commission Date MM",
-            "Revenue Recognition Date"  AS "Revenue Recognition Date",
-            "Revenue Recognition Date YYYY"  AS "Revenue Recognition YYYY",
-            "Revenue Recognition Date MM"    AS "Revenue Recognition MM",
+            "Commission Date"               AS "Commission Date",
+            "Commission Date YYYY"          AS "Commission Date YYYY",
+            "Commission Date MM"            AS "Commission Date MM",
+            "Revenue Recognition Date"      AS "Revenue Recognition Date",
+            "Revenue Recognition Date YYYY" AS "Revenue Recognition YYYY",
+            "Revenue Recognition Date MM"   AS "Revenue Recognition MM",
             "Sales Rep Name"     AS "Sales Rep",
-            "Line Amount"        AS "Sales Actual",
-            "Commission $"       AS "Rev Actual",
-            'Sunoptic'           AS "Product Line",
-            'master_sunoptic_sales' AS "Data Source",
+            "Extension"          AS "Sales Actual",
+            "Commission Amount"  AS "Rev Actual",
+            'Surgical Instruments'               AS "Product Line",
+            'master_novo_sales'  AS "Data Source",
             row_hash,
             "Comm Amount tier 1",
             "Comm tier 2 diff amount"
@@ -60,21 +60,21 @@ WITH commission_rates AS (
 ),
 commission_calculations AS (
     SELECT 
-        mss."Commission Date",
-        mss."Commission Date MM",
-        mss."Commission Date YYYY",
-        mss."Revenue Recognition Date",
-        mss."Revenue Recognition Date MM",
-        mss."Revenue Recognition Date YYYY",
-        mss."Sales Rep Name",
-        mss."Line Amount",
-        mss."Commission $",
-        CAST((mss."Commission $" * crt."Commission tier 1 rate") AS NUMERIC(15,2)) AS "Comm Amount tier 1",
-        CAST((mss."Commission $" * crt."Commission tier 2 rate" - mss."Commission $" * crt."Commission tier 1 rate") AS NUMERIC(15,2)) AS "Comm tier 2 diff amount",
-        mss.row_hash
-    FROM master_sunoptic_sales AS mss
+        mns."Commission Date",
+        mns."Commission Date MM",
+        mns."Commission Date YYYY",
+        mns."Revenue Recognition Date",
+        mns."Revenue Recognition Date MM",
+        mns."Revenue Recognition Date YYYY",
+        mns."Sales Rep Name",
+        mns."Extension",
+        mns."Commission Amount",
+        CAST((mns."Commission Amount" * crt."Commission tier 1 rate") AS NUMERIC(15,2)) AS "Comm Amount tier 1",
+        CAST((mns."Commission Amount" * crt."Commission tier 2 rate" - mns."Commission Amount" * crt."Commission tier 1 rate") AS NUMERIC(15,2)) AS "Comm tier 2 diff amount",
+        mns.row_hash
+    FROM master_novo_sales AS mns
     LEFT JOIN commission_rates AS crt
-        ON mss."Sales Rep Name" = crt."Sales Rep Name"
+        ON mns."Sales Rep Name" = crt."Sales Rep Name"
 )
 SELECT 
     "Commission Date" AS "Commission Date",
@@ -84,10 +84,10 @@ SELECT
     "Revenue Recognition Date MM" AS "Revenue Recognition MM",
     "Revenue Recognition Date YYYY" AS "Revenue Recognition YYYY",
     "Sales Rep Name" AS "Sales Rep",
-    "Line Amount" AS "Sales Actual",
-    "Commission $" AS "Rev Actual",
-    'Sunoptic' AS "Product Line",
-    'master_sunoptic_sales' AS "Data Source",
+    "Extension" AS "Sales Actual",
+    "Commission Amount" AS "Rev Actual",
+    'Surgical Instruments' AS "Product Line",
+    'master_novo_sales' AS "Data Source",
     row_hash,
     "Comm Amount tier 1",
     "Comm tier 2 diff amount"
@@ -97,14 +97,14 @@ FROM commission_calculations;
             df = pd.DataFrame(result.fetchall(), columns=result.keys())
             return df
     except SQLAlchemyError as e:
-        print(f"❌ Error fetching and mapping Sunoptic data: {e}")
+        print(f"❌ Error fetching and mapping Novo data: {e}")
         return None
     finally:
         engine.dispose()
 
-def save_dataframe_to_db(df: pd.DataFrame, table_name: str = "master_sunoptic_sales"):
+def save_dataframe_to_db(df: pd.DataFrame, table_name: str = "master_novo_sales"):
     """
-    Save data to the 'master_sunoptic_sales' table by removing entries based on 'Revenue Recognition Date YYYY' and 'Revenue Recognition Date MM'.
+    Save data to the 'master_novo_sales' table by removing entries based on 'Revenue Recognition Date YYYY' and 'Revenue Recognition Date MM'.
     Return debug messages as a list.
     """
     table_name = table_name.lower()
@@ -202,9 +202,9 @@ def save_dataframe_to_db(df: pd.DataFrame, table_name: str = "master_sunoptic_sa
             df.to_sql(table_name, con=engine, if_exists="append", index=False)
             debug_messages.append(f"✅ {len(df)} new records successfully added to '{table_name}'.")
 
-        # If the table is 'master_sunoptic_sales', update the harmonised table
-        if table_name == "master_sunoptic_sales":
-            harmonised_messages = update_harmonised_table("master_sunoptic_sales")
+        # If the table is 'master_novo_sales', update the harmonised table
+        if table_name == "master_novo_sales":
+            harmonised_messages = update_harmonised_table("master_novo_sales")
             debug_messages.extend(harmonised_messages)
             
             # Now, after updating the harmonised table, update Commission tier 2 date.
@@ -222,19 +222,19 @@ def save_dataframe_to_db(df: pd.DataFrame, table_name: str = "master_sunoptic_sa
 
 def update_harmonised_table(table_name: str):
     """
-    Harmonise the specific table ('master_sunoptic_sales') and update the harmonised_table.
+    Harmonise the specific table ('master_novo_sales') and update the harmonised_table.
     Return debug messages as a list.
     """
     debug_messages = []
-    if table_name == "master_sunoptic_sales":
-        harmonised_data = map_sunoptic_to_harmonised()
+    if table_name == "master_novo_sales":
+        harmonised_data = map_novo_to_harmonised()
         if harmonised_data is not None:
             engine = get_db_connection()
             try:
                 with engine.connect() as conn:
                     # Identify the Product Line
-                    product_line = "Sunoptic"
-                    data_source = "master_sunoptic_sales"
+                    product_line = "Surgical Instruments"
+                    data_source = "master_novo_sales"
 
                     # Delete existing rows for the same product line in harmonised_table
                     delete_query = text("""DELETE FROM harmonised_table WHERE "Product Line" = :product_line AND "Data Source" = :data_source""")
@@ -261,7 +261,7 @@ def update_harmonised_table(table_name: str):
 
 def update_commission_tier_2_date():
     """
-    For Product Line 'Sunoptic', update the harmonised_table."Commission tier 2 date" as follows:
+    For Product Line 'Surgical Instruments', update the harmonised_table."Commission tier 2 date" as follows:
     
       1. For each distinct Sales Rep and year ("Commission Date YYYY"), retrieve all rows (ordered by "Commission Date MM" ascending).
       2. Look up the commission tier threshold from sales_rep_commission_tier_threshold.
@@ -279,11 +279,11 @@ def update_commission_tier_2_date():
     try:
         engine = get_db_connection()
         with engine.connect() as conn:
-            # Step 1: Get commission tier thresholds for Product Line 'Sunoptic'
+            # Step 1: Get commission tier thresholds for Product Line 'Novo'
             threshold_query = text("""
                 SELECT "Sales Rep name", "Year", "Commission tier threshold"
                 FROM sales_rep_commission_tier_threshold
-                WHERE "Product line" = 'Sunoptic'
+                WHERE "Product line" = 'Surgical Instruments'
             """)
             threshold_df = pd.read_sql_query(threshold_query, conn)
             # Create a dictionary keyed by (Sales Rep, Year) with the threshold value.
@@ -292,16 +292,17 @@ def update_commission_tier_2_date():
                 for _, row in threshold_df.iterrows()
             }
             
-            # Step 2: Retrieve all rows from harmonised_table for Product Line 'Sunoptic'
+            # Step 2: Retrieve all rows from harmonised_table for Product Line 'Novo'
             harmonised_query = text("""
                 SELECT *
                 FROM harmonised_table
-                WHERE "Product Line" = 'Sunoptic'
+                WHERE "Product Line" = 'Surgical Instruments'
+                AND "Data Source" = 'master_novo_sales'
             """)
             harmonised_df = pd.read_sql_query(harmonised_query, conn)
             
             if harmonised_df.empty:
-                debug_messages.append("No Sunoptic rows found in harmonised_table.")
+                debug_messages.append("No Novo rows found in harmonised_table.")
                 return debug_messages
             
             # Process by grouping rows by Sales Rep and Year ("Commission Date YYYY")
@@ -312,7 +313,8 @@ def update_commission_tier_2_date():
                 reset_query = text("""
                     UPDATE harmonised_table
                     SET "Commission tier 2 date" = NULL
-                    WHERE "Product Line" = 'Sunoptic'
+                    WHERE "Product Line" = 'Surgical Instruments'
+                      AND "Data Source" = 'master_novo_sales'
                       AND "Sales Rep" = :sales_rep
                       AND "Commission Date YYYY" = :year
                 """)
@@ -348,7 +350,8 @@ def update_commission_tier_2_date():
                 update_query = text("""
                     UPDATE harmonised_table
                     SET "Commission tier 2 date" = :commission_tier_2_date
-                    WHERE "Product Line" = 'Sunoptic'
+                    WHERE "Product Line" = 'Surgical Instruments'
+                      AND "Data Source" = 'master_novo_sales'
                       AND "Sales Rep" = :sales_rep
                       AND "Commission Date YYYY" = :year
                       AND "Commission Date MM" >= :threshold_month
