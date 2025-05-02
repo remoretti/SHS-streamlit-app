@@ -163,7 +163,7 @@ def check_for_blanks_with_details(df: pd.DataFrame, file_type: str = None) -> li
             "Commission Date YYYY",
             "Commission Date MM",
             "Sales Group",
-            "Source ID",
+            #"Source ID",
             "Sales Rep Name",
             "Account Number",
             "Account Name",
