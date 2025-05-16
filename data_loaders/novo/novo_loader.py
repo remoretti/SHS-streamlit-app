@@ -185,27 +185,82 @@ def load_excel_file_novo(filepath: str, year: str = None, month: str = None) -> 
     # Add Sales Rep Name based on Customer Number lookup
     master_df = load_master_sales_rep()
     
-    def lookup_sales_rep(customer_number):
-        """Look up the Sales Rep Name for a given Customer Number."""
+    # def lookup_sales_rep(customer_number):
+    #     """Look up the Sales Rep Name for a given Customer Number."""
+    #     if pd.isna(customer_number) or customer_number == "":
+    #         return ""
+            
+    #     # Find matches in master_sales_rep where Customer field is 'Customer Number'
+    #     # and Data field value matches the customer_number
+    #     matches = master_df[
+    #         (master_df["Customer field"] == "Customer Number") & 
+    #         (master_df["Data field value"] == str(customer_number))
+    #     ]
+        
+    #     if not matches.empty:
+    #         return matches.iloc[0]["Sales Rep name"]
+        
+    #     return ""
+
+    # if "Customer Number" in df.columns:
+    #     df["Sales Rep Name"] = df["Customer Number"].apply(lookup_sales_rep)
+    # else:
+    #     df["Sales Rep Name"] = ""
+    ### Valid from - Valid until ###
+    def lookup_sales_rep(customer_number, rev_year=None, rev_month=None):
+        """
+        Look up the Sales Rep Name for a given Customer Number based on the Revenue Recognition year and month.
+        
+        Args:
+            customer_number: The customer identifier
+            rev_year: Revenue Recognition Year (YYYY)
+            rev_month: Revenue Recognition Month (MM) - zero-padded string like "01", "02", etc.
+        """
         if pd.isna(customer_number) or customer_number == "":
             return ""
-            
-        # Find matches in master_sales_rep where Customer field is 'Customer Number'
-        # and Data field value matches the customer_number
+        
+        # If no revenue recognition year/month provided, use current date as fallback
+        if rev_year is None or rev_month is None:
+            current_date = pd.Timestamp.now()
+            compare_date = pd.Timestamp(year=current_date.year, month=current_date.month, day=1)
+        else:
+            # Construct a date using the first day of the month
+            try:
+                compare_date = pd.Timestamp(year=int(rev_year), month=int(rev_month), day=1)
+            except (ValueError, TypeError):
+                # If there's any issue creating the date, fall back to current date
+                current_date = pd.Timestamp.now()
+                compare_date = pd.Timestamp(year=current_date.year, month=current_date.month, day=1)
+        
+        # Find matches in master_sales_rep where:
+        # 1. Customer field is 'Customer Number'
+        # 2. Data field value matches the customer_number
+        # 3. Transaction date is >= Valid from
+        # 4. Transaction date is < Valid until OR Valid until is NULL
         matches = master_df[
             (master_df["Customer field"] == "Customer Number") & 
-            (master_df["Data field value"] == str(customer_number))
+            (master_df["Data field value"] == str(customer_number)) &
+            (master_df["Valid from"] <= compare_date) &
+            ((master_df["Valid until"].isnull()) | (master_df["Valid until"] > compare_date))
         ]
         
         if not matches.empty:
             return matches.iloc[0]["Sales Rep name"]
         
         return ""
+
+    if "Customer Number" in df.columns and "Revenue Recognition Date YYYY" in df.columns and "Revenue Recognition Date MM" in df.columns:
+        df["Sales Rep Name"] = df.apply(
+            lambda row: lookup_sales_rep(
+                row["Customer Number"],
+                row["Revenue Recognition Date YYYY"],
+                row["Revenue Recognition Date MM"]
+            ), 
+            axis=1
+        )
+
+    ###################
     
-    if "Customer Number" in df.columns:
-        df["Sales Rep Name"] = df["Customer Number"].apply(lookup_sales_rep)
-    else:
-        df["Sales Rep Name"] = ""
 
     # Move "Sales Rep Name" column to after "UD F LOTBUS" 
     if "Sales Rep Name" in df.columns and "UD F LOTBUS" in df.columns:

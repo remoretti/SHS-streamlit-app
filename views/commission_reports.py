@@ -254,18 +254,60 @@ def generate_report(sales_rep, year):
     }
     report_df.rename(columns=month_mapping, inplace=True)
 
-    # Ensure numeric columns are numeric.
-    numeric_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
-    for col in numeric_columns:
-        report_df[col] = pd.to_numeric(report_df[col], errors="coerce").fillna(0)
+    # # Ensure numeric columns are numeric.
+    # numeric_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
+    # for col in numeric_columns:
+    #     report_df[col] = pd.to_numeric(report_df[col], errors="coerce").fillna(0)
 
-    sub_total_values = report_df.drop(columns=["Product Line"]).sum().to_dict()
-    sub_total_values["Product Line"] = "Sub-total"
-    report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)
-    # Separate the "Sub-total" row and sort the remaining rows by "Product Line" ascending.
-    subtotal_df = report_df[report_df["Product Line"] == "Sub-total"]
-    main_df = report_df[report_df["Product Line"] != "Sub-total"].sort_values(by="Product Line", ascending=True)
-    report_df = pd.concat([main_df, subtotal_df], ignore_index=True)
+    # sub_total_values = report_df.drop(columns=["Product Line"]).sum().to_dict()
+    # sub_total_values["Product Line"] = "Sub-total"
+    # report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)
+
+    ### float/DECIMALS error fixed from the code above ###
+    # # Ensure ALL numeric columns are float type to prevent Decimal/float mixing
+    # numeric_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
+    # for col in numeric_columns:
+    #     report_df[col] = pd.to_numeric(report_df[col], errors="coerce").fillna(0).astype(float)
+
+    # # Now sum will work correctly with all float values
+    # sub_total_values = report_df.drop(columns=["Product Line"]).sum().to_dict()
+    # sub_total_values["Product Line"] = "Sub-total"
+    # report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)
+    # ### end of fix ###
+
+    # # Separate the "Sub-total" row and sort the remaining rows by "Product Line" ascending.
+    # subtotal_df = report_df[report_df["Product Line"] == "Sub-total"]
+    # main_df = report_df[report_df["Product Line"] != "Sub-total"].sort_values(by="Product Line", ascending=True)
+    # report_df = pd.concat([main_df, subtotal_df], ignore_index=True)
+    # This approach is more thorough and handles Decimal objects completely
+    for col in report_df.columns:
+        if col != "Product Line":  # Skip non-numeric columns
+            try:
+                # First convert everything to string to handle any data type
+                report_df[col] = report_df[col].astype(str)
+                # Replace any commas that might be in numeric representations
+                report_df[col] = report_df[col].str.replace(',', '')
+                # Convert to float, handling any conversion errors
+                report_df[col] = pd.to_numeric(report_df[col], errors='coerce').fillna(0).astype(float)
+            except Exception as e:
+                # If conversion fails, keep the column as-is
+                print(f"Could not convert column {col} to numeric: {e}")
+    
+    # Make sure we exclude any remaining non-numeric columns from summing
+    numeric_cols = report_df.select_dtypes(include=['float', 'int']).columns
+    
+    # Create a dictionary for the sub-total row with only numeric columns
+    sub_total_values = {}
+    for col in report_df.columns:
+        if col in numeric_cols:
+            sub_total_values[col] = report_df[col].sum()
+        elif col == "Product Line":
+            sub_total_values[col] = "Sub-total"
+        else:
+            sub_total_values[col] = ""  # Non-numeric columns get empty string
+    
+    # Add the sub-total row
+    report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)    
 
     currency_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
     for col in currency_columns:
