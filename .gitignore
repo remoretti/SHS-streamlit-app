@@ -8,6 +8,7 @@ Raw Files/
 code_mix/
 Commission Reports/
 shs-bastion-key.pem
+*.csv
 
 # Ignore environment variable files
 #.env

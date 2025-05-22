@@ -4,6 +4,9 @@ from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 import os
 
+# Increase the pandas styler limit
+pd.set_option("styler.render.max_elements", 12000000)  # Set higher than 11,976,608
+
 # Load environment variables
 load_dotenv()
 DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@" \
@@ -38,7 +41,7 @@ def fetch_business_objective_data(selected_year):
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
-            # Fetch unique product lines and sales reps per product line
+            # Fetch unique product lines and sales reps per product line with explicit deduplication
             sales_rep_query = """
                 SELECT DISTINCT "Product line", "Sales Rep name"
                 FROM sales_rep_business_objective
@@ -46,6 +49,9 @@ def fetch_business_objective_data(selected_year):
                 ORDER BY "Product line", "Sales Rep name"
             """
             sales_reps = pd.read_sql_query(sales_rep_query, conn, params=(selected_year,))
+            
+            # Ensure no duplicates in the base DataFrame
+            sales_reps = sales_reps.drop_duplicates(subset=["Product line", "Sales Rep name"]).reset_index(drop=True)
 
             # Fetch commission tier thresholds
             commission_query = """
@@ -54,12 +60,16 @@ def fetch_business_objective_data(selected_year):
                 WHERE "Year" = %s
             """
             commission_tiers = pd.read_sql_query(commission_query, conn, params=(selected_year,))
+            
+            # Ensure no duplicates in commission tiers
+            commission_tiers = commission_tiers.drop_duplicates(subset=["Product line", "Sales Rep name"]).reset_index(drop=True)
 
-            # Fetch monthly objectives
+            # Fetch monthly objectives - get all at once and pivot
             objective_query = """
                 SELECT "Product line", "Sales Rep name", "Month", "Objective"
                 FROM sales_rep_business_objective
                 WHERE "Year" = %s
+                ORDER BY "Product line", "Sales Rep name", "Month"
             """
             objectives = pd.read_sql_query(objective_query, conn, params=(selected_year,))
 
@@ -73,18 +83,55 @@ def fetch_business_objective_data(selected_year):
             ]
             return pd.DataFrame(columns=columns)
 
-        # Merge data to create the full DataFrame
-        full_df = sales_reps.merge(commission_tiers, on=["Product line", "Sales Rep name"], how="left")
-        for month in range(1, 13):
-            month_name = pd.to_datetime(f"{month}", format="%m").strftime("%B")
-            month_data = objectives[objectives["Month"] == month].rename(columns={"Objective": month_name})
+        # Start with the unique sales reps as the base
+        full_df = sales_reps.copy()
+        
+        # Merge commission tiers
+        full_df = full_df.merge(
+            commission_tiers, 
+            on=["Product line", "Sales Rep name"], 
+            how="left"
+        )
+        
+        # Pivot the objectives data to have months as columns
+        if not objectives.empty:
+            # Convert month numbers to month names for pivoting
+            objectives['Month_Name'] = objectives['Month'].apply(
+                lambda x: pd.to_datetime(f"2023-{x:02d}-01").strftime("%B")
+            )
+            
+            # Pivot to get months as columns
+            pivoted_objectives = objectives.pivot_table(
+                index=["Product line", "Sales Rep name"],
+                columns="Month_Name",
+                values="Objective",
+                aggfunc="first"  # Use first in case of duplicates
+            ).reset_index()
+            
+            # Merge the pivoted objectives
             full_df = full_df.merge(
-                month_data[["Product line", "Sales Rep name", month_name]], 
-                on=["Product line", "Sales Rep name"], 
+                pivoted_objectives,
+                on=["Product line", "Sales Rep name"],
                 how="left"
             )
-        # Calculate the Annual Objective (if all month columns are missing, this will yield 0)
-        full_df["Annual Objective"] = full_df.loc[:, "January":"December"].sum(axis=1, skipna=True)
+        else:
+            # If no objectives, add empty month columns
+            for month in range(1, 13):
+                month_name = pd.to_datetime(f"2023-{month:02d}-01").strftime("%B")
+                full_df[month_name] = None
+
+        # Ensure all month columns exist (in case some months are missing from the pivot)
+        month_columns = ["January", "February", "March", "April", "May", "June",
+                        "July", "August", "September", "October", "November", "December"]
+        for month in month_columns:
+            if month not in full_df.columns:
+                full_df[month] = None
+
+        # Calculate the Annual Objective (sum of all monthly objectives)
+        full_df["Annual Objective"] = full_df[month_columns].sum(axis=1, skipna=True)
+
+        # Final deduplication step to ensure no duplicates
+        full_df = full_df.drop_duplicates(subset=["Product line", "Sales Rep name"]).reset_index(drop=True)
 
         # Format numeric columns with $ symbol
         numeric_columns = [
@@ -95,25 +142,36 @@ def fetch_business_objective_data(selected_year):
             if col in full_df.columns:
                 full_df[col] = full_df[col].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else "")
 
-        # Sort by Product line
+        # Sort by Product line and Sales Rep name
         full_df = full_df.sort_values(by=["Product line", "Sales Rep name"]).reset_index(drop=True)
 
         # Add Sub-Total Rows
         rows_with_subtotals = []
         for product_line, group in full_df.groupby("Product line"):
             rows_with_subtotals.append(group)
+            
             # Calculate sub-totals for numeric columns
-            subtotal = group.loc[:, "January":"December"].applymap(
-                lambda x: float(x.replace('$', '').replace(',', '')) if isinstance(x, str) else 0
-            ).sum()
-            subtotal["Annual Objective"] = subtotal.sum()
-            subtotal_row = pd.Series({
+            subtotal_data = {}
+            for col in month_columns + ["Annual Objective"]:
+                if col in group.columns:
+                    # Convert currency strings back to numbers for calculation
+                    numeric_values = group[col].apply(
+                        lambda x: float(str(x).replace('$', '').replace(',', '')) if isinstance(x, str) and x.startswith('$') else (float(x) if pd.notnull(x) else 0)
+                    )
+                    subtotal_data[col] = f"${numeric_values.sum():,.2f}"
+                else:
+                    subtotal_data[col] = "$0.00"
+            
+            # Create subtotal row
+            subtotal_row = pd.DataFrame([{
                 "Product line": product_line,
-                "Sales Rep name": "Sub-Total",
-                **{col: f"${subtotal[col]:,.2f}" for col in subtotal.index}
-            })
-            rows_with_subtotals.append(pd.DataFrame([subtotal_row]))
+                "Sales Rep name": "🔢 SUB-TOTAL",
+                "Commission tier threshold": "",  # Leave this empty for subtotal rows
+                **subtotal_data
+            }])
+            rows_with_subtotals.append(subtotal_row)
 
+        # Combine all rows
         final_df = pd.concat(rows_with_subtotals, ignore_index=True)
         return final_df
 
@@ -123,13 +181,15 @@ def fetch_business_objective_data(selected_year):
     finally:
         engine.dispose()
 
-
 def update_business_objective_data(df, year):
     """Update the sales_rep_business_objective and sales_rep_commission_tier_threshold tables."""
     engine = get_db_connection()
     try:
-        # Filter out "Sub-Total" rows
-        filtered_df = df[df["Sales Rep name"] != "Sub-Total"].copy()
+        # Filter out "Sub-Total" rows (handle both old and new identifiers)
+        filtered_df = df[
+            (~df["Sales Rep name"].str.contains("Sub-Total", case=False, na=False)) & 
+            (~df["Sales Rep name"].str.contains("SUB-TOTAL", case=False, na=False))
+        ].copy()
 
         # Ensure no duplicates
         filtered_df = filtered_df.drop_duplicates()
@@ -172,17 +232,14 @@ def update_business_objective_data(df, year):
     finally:
         engine.dispose()
 
-def highlight_subtotals_readonly(row):
-    """Style rows where 'Sales Rep name' is 'Sub-Total'."""
-    if row["Sales Rep name"] == "Sub-Total":
-        return ["color: blue; font-weight: bold;" for _ in row]
-    return [""] * len(row)
-
 def remove_subtotals_for_editing(df):
     """Remove Sub-Total rows before making the DataFrame editable."""
-    return df[df["Sales Rep name"] != "Sub-Total"].reset_index(drop=True)
+    # Handle both old and new sub-total identifiers
+    return df[
+        (~df["Sales Rep name"].str.contains("Sub-Total", case=False, na=False)) & 
+        (~df["Sales Rep name"].str.contains("SUB-TOTAL", case=False, na=False))
+    ].reset_index(drop=True)
 
-# New helper function to fetch unique Sales Rep names from the sales_rep_commission_tier table.
 def get_unique_sales_reps_commission_tier():
     """Fetch distinct Sales Rep Names from the sales_rep_commission_tier table."""
     query = """
@@ -222,7 +279,6 @@ def get_unique_product_lines_service_to_product():
     finally:
         engine.dispose()
 
-
 # ----------------- Streamlit UI -----------------
 st.title("Business Objective Editor")
 col1, col2 = st.columns([1, 1])
@@ -242,21 +298,71 @@ if not st.session_state.editing:
     if df.empty:
         st.warning(f"No data available for the selected year: {selected_year}.")
     else:
-        # Display read-only preview with sub-totals if data exists
-        styled_df = df.style.apply(highlight_subtotals_readonly, axis=1)
-        st.write("Preview with Sub-Totals Highlighted (Read-Only):")
-        st.write(styled_df, unsafe_allow_html=True, use_container_width=True)
+        # ============================================================================
+        # Complete Overview Section - The main display
+        # Provide a comprehensive view of all data with clear sub-total indicators
+        # ============================================================================
+        st.markdown("### 📈 Business Objectives Overview")
+        st.markdown("*All data including individual sales reps and sub-totals*")
+        
+        # Modify the dataframe to make sub-totals visually distinct
+        display_df = df.copy()
+        
+        # Make sub-total rows more obvious by capitalizing the text
+        display_df["Sales Rep name"] = display_df["Sales Rep name"].apply(
+            lambda x: f"{x.upper()}" if "SUB-TOTAL" in str(x) else x
+        )
+
+        # Display the complete dataframe with enhanced sub-total visibility
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            height=600,  # Fixed height with scrolling for large datasets
+            column_config={
+                col: st.column_config.TextColumn(col, disabled=True) 
+                for col in display_df.columns
+            }
+        )
+        
+        # Add CSS styling to highlight sub-total rows
+        st.markdown("""
+        <style>
+        /* Enhanced styling for better sub-total visibility */
+        div[data-testid="stDataFrame"] table {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+        }
+        
+        /* Try to style rows containing SUB-TOTAL */
+        div[data-testid="stDataFrame"] table tbody tr:contains("SUB-TOTAL") {
+            background-color: #f0f8ff !important;
+            font-weight: bold !important;
+            border-top: 2px solid #4169e1 !important;
+            border-bottom: 2px solid #4169e1 !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
     
-    if st.button("Edit Data"):
+    # Edit button with prominent styling
+    if st.button("Edit Data", type="primary", use_container_width=True):
         st.session_state.editing = True
+        st.rerun()
+
 else:
-    # Editing mode: remove Sub-Total rows.
+    # ============================================================================
+    # Editing Mode - Clean interface for data modification
+    # ============================================================================
+    st.markdown("### ✏️ Edit Business Objectives")
+    st.markdown("*Sub-total rows are automatically calculated and excluded from editing*")
+    
+    # Remove sub-total rows for editing
     editable_df = remove_subtotals_for_editing(df)
 
-    # Fetch unique Sales Rep names for the drop-down.
+    # Fetch unique options for dropdown columns
     sales_rep_options = get_unique_sales_reps_commission_tier()
     product_line_options = get_unique_product_lines_service_to_product()
 
+    # Configure column types for better user experience
     col_config = {
         "Sales Rep name": st.column_config.SelectboxColumn(
             "Sales Rep name",
@@ -270,7 +376,7 @@ else:
         )
     }
 
-    st.write("Editable DataFrame (Sub-Totals Removed):")
+    st.write("**Editable Data** *(Sub-totals will be automatically recalculated)*:")
     edited_df = st.data_editor(
         editable_df,
         use_container_width=True,
@@ -280,24 +386,36 @@ else:
         column_config=col_config
     )
 
-    # Save changes with confirmation logic.
+    # Save changes with confirmation workflow
     if "save_initiated" not in st.session_state:
         st.session_state.save_initiated = False
 
-    if st.button("Save Changes"):
-        st.session_state.save_initiated = True
-        st.warning("Are you sure you want to replace the current data with the new changes?")
+    # Action buttons in columns for better layout
+    col_save, col_cancel = st.columns(2)
+    
+    with col_save:
+        if st.button("Save Changes", type="primary", use_container_width=True):
+            st.session_state.save_initiated = True
+            st.warning("⚠️ Are you sure you want to replace the current data with the new changes?")
 
-    if st.session_state.save_initiated:
-        if st.button("Yes, Replace Table"):
-            update_business_objective_data(edited_df, selected_year)
-            st.session_state.save_initiated = False  # Reset state after save
-            st.session_state.editing = False  # Return to read-only mode
+    with col_cancel:
+        if st.button("Cancel Editing", use_container_width=True):
+            st.session_state.editing = False
             st.rerun()
 
-    if st.button("Cancel Editing"):
-        st.session_state.editing = False
-        st.rerun()
-
-    else:
-        st.warning(f"No data available for the selected year: {selected_year}.")
+    # Confirmation workflow
+    if st.session_state.save_initiated:
+        col_confirm, col_abort = st.columns(2)
+        
+        with col_confirm:
+            if st.button("✅ Yes, Replace Table", type="primary", use_container_width=True):
+                update_business_objective_data(edited_df, selected_year)
+                st.session_state.save_initiated = False  # Reset state after save
+                st.session_state.editing = False  # Return to read-only mode
+                st.rerun()
+        
+        with col_abort:
+            if st.button("❌ No, Keep Current Data", use_container_width=True):
+                st.session_state.save_initiated = False
+                st.info("Changes cancelled. Current data preserved.")
+                st.rerun()
