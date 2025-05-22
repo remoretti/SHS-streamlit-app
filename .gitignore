@@ -11,7 +11,7 @@ shs-bastion-key.pem
 *.csv
 
 # Ignore environment variable files
-#.env
+.env
 
 # Python cache and build artifacts
 __pycache__/
