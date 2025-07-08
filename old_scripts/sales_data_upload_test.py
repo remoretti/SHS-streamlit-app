@@ -44,15 +44,15 @@ def get_db_connection():
 
 # Define file types and their corresponding handlers
 FILE_TYPES = {
-    "Chemence": "Chemence",
-    "Cygnus": "Cygnus",
-    "InspeKtor": "InspeKtor",
     "Logiquip": "Logiquip",
-    "Novo": "Novo",
-    "QuickBooks": "QuickBooks",
+    "Cygnus": "Cygnus",
     "Summit Medical": "Summit Medical",
+    "QuickBooks": "QuickBooks",
+    "InspeKtor": "InspeKtor",
     "Sunoptic": "Sunoptic",
     "Ternio": "Ternio",
+    "Novo": "Novo",
+    "Chemence": "Chemence",
 }
 
 # Dictionary specifying if a file type's loader already handles commission dates internally
@@ -71,10 +71,10 @@ LOADERS_WITH_DATE_HANDLING = {
     "Novo": False
 }
 
-def load_file(filepath: str, file_type: str, debug_info: list, year: str = None, month: str = None, rev_year: str = None, rev_month: str = None) -> pd.DataFrame:
+def load_file(filepath: str, file_type: str, debug_info: list, year: str = None, month: str = None) -> pd.DataFrame:
     """
     Generic dispatcher to the correct loader function, with standardized parameters.
-    All loaders receive year and month where applicable, and some receive rev_year and rev_month.
+    All loaders receive year and month where applicable.
     """
     if file_type == "Cygnus":
         return load_excel_file_cygnus(filepath)
@@ -84,18 +84,18 @@ def load_file(filepath: str, file_type: str, debug_info: list, year: str = None,
         # For Summit Medical, check if the file is PDF or Excel
         if filepath.lower().endswith('.xlsx') or filepath.lower().endswith('.xls'):
             # Check for Revenue Recognition date selections
-            rev_year_sm = None
-            rev_month_sm = None
-            if "summit_medical_rev_selected_year" in st.session_state and "summit_medical_rev_selected_month" in st.session_state:
-                rev_year_sm = str(st.session_state["summit_medical_rev_selected_year"])
-                rev_month_sm = st.session_state["summit_medical_rev_selected_month"]
+            rev_year = None
+            rev_month = None
+            if "summit_rev_selected_year" in st.session_state and "summit_rev_selected_month" in st.session_state:
+                rev_year = str(st.session_state["summit_rev_selected_year"])
+                rev_month = st.session_state["summit_rev_selected_month"]
             
             return load_excel_file_summit_medical(
                 filepath, 
                 year=year,
                 month=month,
-                rev_year=rev_year_sm,
-                rev_month=rev_month_sm
+                rev_year=rev_year,
+                rev_month=rev_month
             )
         else:
             # For PDF files, use the PDF loader
@@ -105,20 +105,7 @@ def load_file(filepath: str, file_type: str, debug_info: list, year: str = None,
     elif file_type == "InspeKtor":
         return load_excel_file_inspektor(filepath)
     elif file_type == "Sunoptic":
-        # Check for Revenue Recognition date selections
-        rev_year_sn = None
-        rev_month_sn = None
-        if "sunoptic_rev_selected_year" in st.session_state and "sunoptic_rev_selected_month" in st.session_state:
-            rev_year_sn = str(st.session_state["sunoptic_rev_selected_year"])
-            rev_month_sn = st.session_state["sunoptic_rev_selected_month"]
-        
-        return load_excel_file_sunoptic(
-            filepath,
-            year=year,
-            month=month,
-            rev_year=rev_year_sn,
-            rev_month=rev_month_sn
-        )
+        return load_excel_file_sunoptic(filepath)
     elif file_type == "Ternio":
         return load_excel_file_ternio(filepath)
     elif file_type == "Novo":
@@ -282,6 +269,98 @@ def check_for_valid_sales_rep(df: pd.DataFrame) -> list:
     
     return missing_names
 
+def get_missing_sales_rep_details(df: pd.DataFrame, file_type: str) -> list:
+    """
+    NEW FUNCTION: Get details about missing Sales Rep Names and their corresponding field values.
+    Returns a list of dictionaries with missing sales rep info.
+    """
+    if "Sales Rep Name" not in df.columns:
+        return []
+    
+    # Get valid sales rep names
+    valid_names = set(get_unique_sales_rep_names())
+    
+    # Find rows with missing/invalid sales rep names
+    missing_details = []
+    
+    for idx, row in df.iterrows():
+        sales_rep_name = str(row.get("Sales Rep Name", "")).strip()
+        
+        if not sales_rep_name or sales_rep_name not in valid_names:
+            # Get the customer field mapping for this file type
+            customer_field = get_customer_field_for_file_type(file_type)
+            
+            if customer_field and customer_field in df.columns:
+                field_value = str(row.get(customer_field, "")).strip()
+                
+                missing_details.append({
+                    "row_index": idx,
+                    "sales_rep_name": sales_rep_name,
+                    "customer_field": customer_field,
+                    "field_value": field_value,
+                    "file_type": file_type
+                })
+    
+    return missing_details
+
+def get_customer_field_for_file_type(file_type: str) -> str:
+    """
+    NEW FUNCTION: Get the customer field name for each file type based on master_sales_rep table structure.
+    This determines which field from the uploaded data should match master_sales_rep."Data field value".
+    """
+    field_mapping = {
+        "Chemence": "Source ID",
+        "Cygnus": "Name",  # Based on cygnus_loader.py enrichment logic
+        "Logiquip": "Customer",  # Assuming this based on common patterns
+        "QuickBooks": "Customer",
+        "Summit Medical": "Client Name",
+        "InspeKtor": "Company",
+        "Sunoptic": "Customer ID",
+        "Ternio": "Client Name",
+        "Novo": "Customer Number"
+    }
+    return field_mapping.get(file_type, "")
+
+def get_master_sales_rep_records(missing_details: list) -> pd.DataFrame:
+    """
+    NEW FUNCTION: Fetch relevant master_sales_rep records for missing Sales Rep Names.
+    """
+    if not missing_details:
+        return pd.DataFrame()
+    
+    engine = get_db_connection()
+    try:
+        with engine.connect() as conn:
+            # Build conditions for the query
+            conditions = []
+            params = {}
+            
+            for i, detail in enumerate(missing_details):
+                condition = f'("Source" = :source_{i} AND "Customer field" = :customer_field_{i} AND "Data field value" = :field_value_{i})'
+                conditions.append(condition)
+                params[f'source_{i}'] = detail['file_type']
+                params[f'customer_field_{i}'] = detail['customer_field']
+                params[f'field_value_{i}'] = detail['field_value']
+            
+            if conditions:
+                query = f"""
+                    SELECT "Source", "Customer field", "Data field value", "Sales Rep name", "Valid from", "Valid until"
+                    FROM master_sales_rep
+                    WHERE {' OR '.join(conditions)}
+                    ORDER BY "Source", "Customer field", "Data field value"
+                """
+                
+                result = conn.execute(text(query), params)
+                df = pd.DataFrame(result.fetchall(), columns=result.keys())
+                return df
+            else:
+                return pd.DataFrame()
+                
+    except Exception as e:
+        st.error(f"Error fetching master_sales_rep records: {e}")
+        return pd.DataFrame()
+    finally:
+        engine.dispose()
 
 def add_commission_date_columns(df: pd.DataFrame, year: str, month: str, month_num: int) -> pd.DataFrame:
     """
@@ -437,6 +516,10 @@ def sales_data_tab():
     if "overwrite_messages" not in st.session_state:
         st.session_state.overwrite_messages = []
 
+    # NEW: Initialize step 3 permission flag
+    if "step3_permission" not in st.session_state:
+        st.session_state.step3_permission = False
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -452,7 +535,8 @@ def sales_data_tab():
                 "selected_year",
                 "selected_month",
                 "showing_overwrite_warning",
-                "overwrite_messages"
+                "overwrite_messages",
+                "step3_permission"  # NEW: Clear step 3 permission
             ]
             for key in keys_to_clear:
                 if key in st.session_state:
@@ -472,6 +556,7 @@ def sales_data_tab():
             st.session_state.pop("confirmed_file_bytes", None)
             st.session_state.pop("confirmed_file_name", None)
             st.session_state.pop("confirmed_file_type", None)
+            st.session_state["step3_permission"] = False  # NEW: Reset step 3 permission
             
             # Clear date selection when product line changes
             if "selected_year" in st.session_state:
@@ -525,23 +610,22 @@ def sales_data_tab():
             st.session_state["confirmed_file_bytes"] = file_bytes
             st.session_state["confirmed_file_name"] = uploaded_file.name
             st.session_state["confirmed_file_type"] = uploaded_file.type
+            st.session_state["step3_permission"] = False  # NEW: Reset step 3 permission when new file is confirmed
             st.success(f"File '{uploaded_file.name}' has been confirmed!")
 
     # Check if we should prevent processing
     should_stop_processing = False
     
-    # New code to replace it:
-    needs_rev_date_selection = (
+    # Special handling for Summit Medical Excel files to also ask for Revenue Recognition date
+    is_summit_excel = (
+        st.session_state.get("selected_file_type") == "Summit Medical" and
         "confirmed_file_name" in st.session_state and
-        st.session_state["confirmed_file_name"].lower().endswith(('.xlsx', '.xls')) and
-        st.session_state.get("selected_file_type") in ["Summit Medical", "Sunoptic"]
+        st.session_state["confirmed_file_name"].lower().endswith(('.xlsx', '.xls'))
     )
 
-    # Then update the Revenue Recognition Date Selection UI accordingly
-    if needs_rev_date_selection:
-        file_type = st.session_state.get("selected_file_type")
-        st.subheader(f"Revenue Recognition Date Selection for {file_type}")
-        st.write(f"For {file_type} Excel files, please also select the revenue recognition date:")
+    if is_summit_excel:
+        st.subheader("Revenue Recognition Date Selection")
+        st.write("For Summit Medical Excel files, please also select the revenue recognition date:")
         
         # Year and month options for Revenue Recognition Date
         current_year = datetime.datetime.now().year
@@ -553,42 +637,42 @@ def sales_data_tab():
         with col_rev1:
             rev_selected_year = st.selectbox("Select Revenue Recognition Year:", year_options, 
                                     format_func=lambda x: "Select a year..." if x is None else x,
-                                    key=f"{file_type.lower().replace(' ', '_')}_rev_year_selector")
+                                    key="summit_rev_year_selector")
         with col_rev2:
             rev_selected_month = st.selectbox("Select Revenue Recognition Month:", month_options,
                                         format_func=lambda x: "Select a month..." if x is None else x,
-                                        key=f"{file_type.lower().replace(' ', '_')}_rev_month_selector")
+                                        key="summit_rev_month_selector")
         
         # Check if both selections are made
         if rev_selected_year is not None and rev_selected_month is not None:
             # Store these in session state for later use
-            st.session_state[f"{file_type.lower().replace(' ', '_')}_rev_selected_year"] = rev_selected_year
-            st.session_state[f"{file_type.lower().replace(' ', '_')}_rev_selected_month"] = rev_selected_month
-            st.session_state[f"{file_type.lower().replace(' ', '_')}_rev_selected_month_num"] = month_options.index(rev_selected_month)
+            st.session_state["summit_rev_selected_year"] = rev_selected_year
+            st.session_state["summit_rev_selected_month"] = rev_selected_month
+            st.session_state["summit_rev_selected_month_num"] = month_options.index(rev_selected_month)
             st.success("Revenue Recognition date selected successfully!")
         else:
             # Clear previous selections if either is not selected
-            if f"{file_type.lower().replace(' ', '_')}_rev_selected_year" in st.session_state:
-                del st.session_state[f"{file_type.lower().replace(' ', '_')}_rev_selected_year"]
-            if f"{file_type.lower().replace(' ', '_')}_rev_selected_month" in st.session_state:
-                del st.session_state[f"{file_type.lower().replace(' ', '_')}_rev_selected_month"]
-            if f"{file_type.lower().replace(' ', '_')}_rev_selected_month_num" in st.session_state:
-                del st.session_state[f"{file_type.lower().replace(' ', '_')}_rev_selected_month_num"]
+            if "summit_rev_selected_year" in st.session_state:
+                del st.session_state["summit_rev_selected_year"]
+            if "summit_rev_selected_month" in st.session_state:
+                del st.session_state["summit_rev_selected_month"]
+            if "summit_rev_selected_month_num" in st.session_state:
+                del st.session_state["summit_rev_selected_month_num"]
 
-    # Update the should_stop_processing check to consider both file types
-    if needs_rev_date_selection and (
+    # Check for missing Revenue Recognition date for Summit Medical Excel files
+    if is_summit_excel and (
         "selected_year" not in st.session_state or 
         "selected_month" not in st.session_state or
-        f"{st.session_state.get('selected_file_type').lower().replace(' ', '_')}_rev_selected_year" not in st.session_state or 
-        f"{st.session_state.get('selected_file_type').lower().replace(' ', '_')}_rev_selected_month" not in st.session_state
+        "summit_rev_selected_year" not in st.session_state or 
+        "summit_rev_selected_month" not in st.session_state
     ):
         # Check if Commission Date is missing
         if "selected_year" not in st.session_state or "selected_month" not in st.session_state:
             st.warning("⚠️ Please select both a year and month for the Commission Date before proceeding.")
             should_stop_processing = True
         # Check if Revenue Recognition Date is missing
-        elif f"{st.session_state.get('selected_file_type').lower().replace(' ', '_')}_rev_selected_year" not in st.session_state or f"{st.session_state.get('selected_file_type').lower().replace(' ', '_')}_rev_selected_month" not in st.session_state:
-            st.warning(f"⚠️ Please select both a year and month for the Revenue Recognition Date before proceeding.")
+        elif "summit_rev_selected_year" not in st.session_state or "summit_rev_selected_month" not in st.session_state:
+            st.warning("⚠️ Please select both a year and month for the Revenue Recognition Date before proceeding.")
             should_stop_processing = True
 
     # Check for date selection
@@ -604,253 +688,368 @@ def sales_data_tab():
             st.warning("Please upload and confirm a file to proceed.")
         return
 
-    st.markdown("---")
-    st.subheader("Step 3: Loaded and Enriched Data")
-    file_type = st.session_state["selected_file_type"]
-    file_name = st.session_state["confirmed_file_name"]
-    mime_type = st.session_state["confirmed_file_type"]
-    file_bytes = st.session_state["confirmed_file_bytes"]
-    
-    # Get year and month for commission date
-    year = st.session_state["selected_year"]
-    month = st.session_state["selected_month"]
-    month_num = st.session_state["selected_month_num"]
+    # NEW: Pre-validation step - Check for missing Sales Rep Names BEFORE showing Step 3
+    if not st.session_state.get("step3_permission", False):
+        st.markdown("---")
+        st.subheader("Sales Rep Validation")
+        
+        # Process the file to check for missing sales rep names
+        file_type = st.session_state["selected_file_type"]
+        file_name = st.session_state["confirmed_file_name"]
+        mime_type = st.session_state["confirmed_file_type"]
+        file_bytes = st.session_state["confirmed_file_bytes"]
+        
+        # Get year and month for commission date
+        year = st.session_state["selected_year"]
+        month = st.session_state["selected_month"]
+        month_num = st.session_state["selected_month_num"]
 
-    st.write(f"### Processing: {file_name} (Type: {file_type})")
+        try:
+            debug_info = []
+            # Load the file (same logic as before)
+            if file_type == "Summit Medical" and mime_type == "application/pdf":
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                    tmp_file.write(file_bytes)
+                    tmp_file_path = tmp_file.name
+                try:
+                    df = load_pdf_file_summit_medical(tmp_file_path)
+                finally:
+                    os.remove(tmp_file_path)
+            else:
+                # For all Excel files
+                suffix = ".xlsx" if mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" else None
+                extension = suffix if suffix else ".pdf"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp_file:
+                    tmp_file.write(file_bytes)
+                    tmp_file_path = tmp_file.name
+                try:
+                    df = load_file(
+                        tmp_file_path, 
+                        file_type, 
+                        debug_info, 
+                        year=str(year), 
+                        month=month
+                    )
+                finally:
+                    os.remove(tmp_file_path)
 
-    try:
-        debug_info = []
-        # For Summit Medical PDFs
-        if file_type == "Summit Medical" and mime_type == "application/pdf":
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                tmp_file.write(file_bytes)
-                tmp_file_path = tmp_file.name
-            try:
-                df = load_pdf_file_summit_medical(tmp_file_path)
-            finally:
-                os.remove(tmp_file_path)
-        else:
-            # For all Excel files
-            suffix = ".xlsx" if mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" else None
-            extension = suffix if suffix else ".pdf"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp_file:
-                tmp_file.write(file_bytes)
-                tmp_file_path = tmp_file.name
-            try:
-                # Pass year and month to all loaders
-                # Replace with:
-                # Check if we need to pass Revenue Recognition date parameters
-                rev_year = None
-                rev_month = None
-                if file_type == "Summit Medical" and "summit_medical_rev_selected_year" in st.session_state and "summit_medical_rev_selected_month" in st.session_state:
-                    rev_year = str(st.session_state["summit_medical_rev_selected_year"])
-                    rev_month = st.session_state["summit_medical_rev_selected_month"]
-                elif file_type == "Sunoptic" and "sunoptic_rev_selected_year" in st.session_state and "sunoptic_rev_selected_month" in st.session_state:
-                    rev_year = str(st.session_state["sunoptic_rev_selected_year"])
-                    rev_month = st.session_state["sunoptic_rev_selected_month"]
+            # Add Commission Date columns if needed
+            if not LOADERS_WITH_DATE_HANDLING.get(file_type, False):
+                df = add_commission_date_columns(df, year, month, month_num)
 
-                df = load_file(
-                    tmp_file_path, 
-                    file_type, 
-                    debug_info, 
-                    year=str(year), 
-                    month=month,
-                    rev_year=rev_year,
-                    rev_month=rev_month
+            # Validate file format
+            is_valid, missing_columns = validate_file_format(df, file_type)
+            if not is_valid:
+                expected_list = "\n".join(f'"{col}"' for col in EXPECTED_COLUMNS.get(file_type, []))
+                st.error(
+                    f"**The file uploaded does not match the expected format.**\n\n"
+                    f"Please check that you have selected the correct product line and associated file.\n\n"
+                    f"**Expected columns for {file_type}:**\n{expected_list}\n\n"
+                    f"**Missing columns:** {', '.join(missing_columns)}"
                 )
-            finally:
-                os.remove(tmp_file_path)
+                return
 
-        # Add Commission Date columns for file types that don't already handle it
-        if not LOADERS_WITH_DATE_HANDLING.get(file_type, False):
-            df = add_commission_date_columns(df, year, month, month_num)
-
-        # Validate file format
-        is_valid, missing_columns = validate_file_format(df, file_type)
-        if not is_valid:
-            expected_list = "\n".join(f'"{col}"' for col in EXPECTED_COLUMNS.get(file_type, []))
-            st.error(
-                f"**The file uploaded does not match the expected format.**\n\n"
-                f"Please check that you have selected the correct product line and associated file.\n\n"
-                f"**Expected columns for {file_type}:**\n{expected_list}\n\n"
-                f"**Missing columns:** {', '.join(missing_columns)}"
-            )
+            # NEW: Check for missing Sales Rep Names
+            missing_sales_rep_details = get_missing_sales_rep_details(df, file_type)
+            
+            if missing_sales_rep_details:
+                st.warning(f"⚠️ Found {len(missing_sales_rep_details)} rows with missing or invalid Sales Rep Names.")
+                st.write("**Please review the following master_sales_rep records:**")
+                
+                # Get and display relevant master_sales_rep records
+                master_records = get_master_sales_rep_records(missing_sales_rep_details)
+                
+                # Always show the master_sales_rep table structure with all missing criteria
+                st.write("**Master Sales Rep Records (for missing Sales Rep Names):**")
+                
+                # Create a complete dataframe showing what records should exist
+                missing_records_data = []
+                for detail in missing_sales_rep_details:
+                    # Check if this record exists in master_records
+                    existing_record = None
+                    if not master_records.empty:
+                        matching_records = master_records[
+                            (master_records['Source'] == detail['file_type']) &
+                            (master_records['Customer field'] == detail['customer_field']) &
+                            (master_records['Data field value'] == detail['field_value'])
+                        ]
+                        if not matching_records.empty:
+                            existing_record = matching_records.iloc[0]
+                    
+                    # Add the record (existing or placeholder)
+                    missing_records_data.append({
+                        'Source': detail['file_type'],
+                        'Customer field': detail['customer_field'],
+                        'Data field value': detail['field_value'],
+                        'Sales Rep name': existing_record['Sales Rep name'] if existing_record is not None else '',
+                        'Valid from': existing_record['Valid from'] if existing_record is not None else '',
+                        'Valid until': existing_record['Valid until'] if existing_record is not None else ''
+                    })
+                
+                # Remove duplicates and display
+                missing_records_df = pd.DataFrame(missing_records_data).drop_duplicates()
+                st.dataframe(missing_records_df, use_container_width=True, hide_index=True)
+                
+                # Show summary of what's missing vs what exists
+                existing_count = len(missing_records_df[missing_records_df['Sales Rep name'] != ''])
+                missing_count = len(missing_records_df[missing_records_df['Sales Rep name'] == ''])
+                
+                if existing_count > 0:
+                    st.info(f"✅ Found {existing_count} existing records in master_sales_rep")
+                if missing_count > 0:
+                    st.warning(f"❌ Missing {missing_count} records in master_sales_rep (shown with empty Sales Rep name)")
+                
+                # Button to proceed to Step 3
+                if st.button("Go to Step 3", key="go_to_step3"):
+                    st.session_state["step3_permission"] = True
+                    st.rerun()
+                
+                return  # Don't show Step 3 yet
+            else:
+                # No missing sales rep names, automatically proceed to Step 3
+                st.success("✅ All Sales Rep Names are valid!")
+                st.session_state["step3_permission"] = True
+                
+        except Exception as e:
+            st.error(f"Error processing file for validation: {e}")
             return
 
-        # Check for valid Sales Rep names
-        missing_names = check_for_valid_sales_rep(df)
-        if missing_names:
-            st.error("The following sales reps don't have any commission tier setup: " + ", ".join(missing_names))
-            st.warning("Please set up commission tiers for these sales reps in the Portfolio Management section before proceeding.")
-            
-            # Add a link to the Portfolio Management page
-            if st.button("Go to Portfolio Management"):
-                st.rerun()
-            
-            # Stop further processing
-            return
+    # Original Step 3 logic (only shown if step3_permission is True)
+    if st.session_state.get("step3_permission", False):
+        st.markdown("---")
+        st.subheader("Step 3: Loaded and Enriched Data")
+        file_type = st.session_state["selected_file_type"]
+        file_name = st.session_state["confirmed_file_name"]
+        mime_type = st.session_state["confirmed_file_type"]
+        file_bytes = st.session_state["confirmed_file_bytes"]
+        
+        # Get year and month for commission date
+        year = st.session_state["selected_year"]
+        month = st.session_state["selected_month"]
+        month_num = st.session_state["selected_month_num"]
 
-        # Check for Amount Line issues in QuickBooks
-        amount_line_issues = []
-        if file_type == "QuickBooks":
-            amount_line_issues = check_for_amount_line_issues(df)
-            if amount_line_issues:
-                st.error("Some rows in the QuickBooks file have 'Amount line' ≤ 0. Please review them.")
-                rows_str = ", ".join(map(str, amount_line_issues))
-                st.markdown(f"**Row(s):** {rows_str}")
+        st.write(f"### Processing: {file_name} (Type: {file_type})")
 
-        # Configure Column Constraints for Editable DataFrame
-        rep_column = None
-        if "Sales Rep Name" in df.columns:
-            rep_column = "Sales Rep Name"
-        elif "Sales Rep" in df.columns:
-            rep_column = "Sales Rep"
+        try:
+            debug_info = []
+            # For Summit Medical PDFs
+            if file_type == "Summit Medical" and mime_type == "application/pdf":
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                    tmp_file.write(file_bytes)
+                    tmp_file_path = tmp_file.name
+                try:
+                    df = load_pdf_file_summit_medical(tmp_file_path)
+                finally:
+                    os.remove(tmp_file_path)
+            else:
+                # For all Excel files
+                suffix = ".xlsx" if mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" else None
+                extension = suffix if suffix else ".pdf"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp_file:
+                    tmp_file.write(file_bytes)
+                    tmp_file_path = tmp_file.name
+                try:
+                    # Pass year and month to all loaders
+                    df = load_file(
+                        tmp_file_path, 
+                        file_type, 
+                        debug_info, 
+                        year=str(year), 
+                        month=month
+                    )
+                finally:
+                    os.remove(tmp_file_path)
 
-        col_config = {}
-        if rep_column:
-            rep_options = get_unique_sales_rep_names()
-            col_config[rep_column] = st.column_config.SelectboxColumn(
-                rep_column,
-                options=rep_options,
-                help="Select a Sales Rep from the list"
+            # Add Commission Date columns for file types that don't already handle it
+            if not LOADERS_WITH_DATE_HANDLING.get(file_type, False):
+                df = add_commission_date_columns(df, year, month, month_num)
+
+            # Validate file format
+            is_valid, missing_columns = validate_file_format(df, file_type)
+            if not is_valid:
+                expected_list = "\n".join(f'"{col}"' for col in EXPECTED_COLUMNS.get(file_type, []))
+                st.error(
+                    f"**The file uploaded does not match the expected format.**\n\n"
+                    f"Please check that you have selected the correct product line and associated file.\n\n"
+                    f"**Expected columns for {file_type}:**\n{expected_list}\n\n"
+                    f"**Missing columns:** {', '.join(missing_columns)}"
+                )
+                return
+
+            # Check for valid Sales Rep names (this should pass now, but keeping for safety)
+            missing_names = check_for_valid_sales_rep(df)
+            if missing_names:
+                st.error("The following sales reps don't have any commission tier setup: " + ", ".join(missing_names))
+                st.warning("Please set up commission tiers for these sales reps in the Portfolio Management section before proceeding.")
+                
+                # Add a link to the Portfolio Management page
+                if st.button("Go to Portfolio Management"):
+                    st.rerun()
+                
+                # Stop further processing
+                return
+
+            # Check for Amount Line issues in QuickBooks
+            amount_line_issues = []
+            if file_type == "QuickBooks":
+                amount_line_issues = check_for_amount_line_issues(df)
+                if amount_line_issues:
+                    st.error("Some rows in the QuickBooks file have 'Amount line' ≤ 0. Please review them.")
+                    rows_str = ", ".join(map(str, amount_line_issues))
+                    st.markdown(f"**Row(s):** {rows_str}")
+
+            # Configure Column Constraints for Editable DataFrame
+            rep_column = None
+            if "Sales Rep Name" in df.columns:
+                rep_column = "Sales Rep Name"
+            elif "Sales Rep" in df.columns:
+                rep_column = "Sales Rep"
+
+            col_config = {}
+            if rep_column:
+                rep_options = get_unique_sales_rep_names()
+                col_config[rep_column] = st.column_config.SelectboxColumn(
+                    rep_column,
+                    options=rep_options,
+                    help="Select a Sales Rep from the list"
+                )
+
+            # Render the editable data editor with column configuration
+            unique_key = f"editor_{file_name}_{file_type}"
+            edited_df = st.data_editor(
+                df,
+                use_container_width=True,
+                num_rows="dynamic",
+                hide_index=False,
+                key=unique_key,
+                column_config=col_config
             )
 
-        # Render the editable data editor with column configuration
-        unique_key = f"editor_{file_name}_{file_type}"
-        edited_df = st.data_editor(
-            df,
-            use_container_width=True,
-            num_rows="dynamic",
-            hide_index=False,
-            key=unique_key,
-            column_config=col_config
-        )
+            st.session_state.dataframes[file_name] = (edited_df, file_type)
 
-        st.session_state.dataframes[file_name] = (edited_df, file_type)
+        except Exception as e:
+            st.error(f"Error loading {file_name} of type {file_type}: {e}")
+            return
 
-    except Exception as e:
-        st.error(f"Error loading {file_name} of type {file_type}: {e}")
-        return
-
-    # Create a visible separation for the action section
-    st.markdown("---")
-    st.subheader("Step 4: Save Data to Database")
-    
-    # Create two columns for layout
-    col1, col2 = st.columns([2, 2])
-    
-    # Always show the warning in the first column if applicable
-    with col1:
-        if st.session_state.showing_overwrite_warning:
-            st.warning("⚠️ Warning: Existing data will be overwritten!")
-            st.markdown("The following data already exists in the database:")
-            for msg in st.session_state.overwrite_messages:
-                st.markdown(f"- {msg}")
+        # Create a visible separation for the action section
+        st.markdown("---")
+        st.subheader("Step 4: Save Data to Database")
+        
+        # Create two columns for layout
+        col1, col2 = st.columns([3, 1])
+        
+        # Always show the warning in the first column if applicable
+        with col1:
+            if st.session_state.showing_overwrite_warning:
+                st.warning("⚠️ Warning: Existing data will be overwritten!")
+                st.markdown("The following data already exists in the database:")
+                for msg in st.session_state.overwrite_messages:
+                    st.markdown(f"- {msg}")
         
         # Always show the buttons in the second column
-        #with col2:
-        # Main save button with dynamic label based on warning state
-        save_button_label = "Confirm and Save to Database"
-        if st.session_state.showing_overwrite_warning:
-            save_button_label = "Yes, Overwrite Data"
-        
-        if st.button(save_button_label, key="save_button", use_container_width=True):
-            if not st.session_state.dataframes:
-                st.warning("No data available to save. Please upload and process files first.")
-                return
-
-            # Check for blank cells in required fields
-            invalid_files = {}
-            for f_name, (df_data, f_type) in st.session_state.dataframes.items():
-                blank_details = check_for_blanks_with_details(df_data, f_type)
-                if blank_details:
-                    invalid_files[f_name] = blank_details
-
-            if invalid_files:
-                st.error("Some files contain rows with blank values. Please fix them and try again.")
-                for fname, row_col_details in invalid_files.items():
-                    for row, cols in row_col_details:
-                        st.markdown(f"- **File:** {fname} | **Row:** {row} | **Columns:** {', '.join(cols)}")
-                return
+        with col2:
+            # Main save button with dynamic label based on warning state
+            save_button_label = "Confirm and Save to Database"
+            if st.session_state.showing_overwrite_warning:
+                save_button_label = "Yes, Overwrite Data"
             
-            # If we're not already showing the warning, check for data to overwrite
-            if not st.session_state.showing_overwrite_warning:
-                overwrite_needed = False
-                overwrite_messages = []
-                
+            if st.button(save_button_label, key="save_button", use_container_width=True):
+                if not st.session_state.dataframes:
+                    st.warning("No data available to save. Please upload and process files first.")
+                    return
+
+                # Check for blank cells in required fields
+                invalid_files = {}
                 for f_name, (df_data, f_type) in st.session_state.dataframes.items():
-                    has_existing, date_info = check_for_existing_data(df_data, f_type)
-                    if has_existing:
-                        overwrite_needed = True
-                        overwrite_messages.append(f"**{f_type}**: {date_info}")
-                
-                # If overwrite is needed, show the warning and return without saving
-                if overwrite_needed:
-                    st.session_state.showing_overwrite_warning = True
-                    st.session_state.overwrite_messages = overwrite_messages
-                    st.rerun()  # Force refresh to show the warning
-                    return  # Return without saving
-            
-            # If we get here, either there's no data to overwrite or the user has confirmed
-            # Proceed with saving all dataframes
-            
-            # Reset the warning state
-            st.session_state.showing_overwrite_warning = False
-            st.session_state.overwrite_messages = []
-            
-            # Save all the dataframes
-            debug_output = []
-            for f_name, (df_data, f_type) in st.session_state.dataframes.items():
-                try:
-                    # Dispatch to appropriate save function based on file type
-                    save_functions = {
-                        "Cygnus": save_cygnus_to_db,
-                        "Logiquip": save_logiquip_to_db,
-                        "Summit Medical": save_summit_medical_to_db,
-                        "QuickBooks": save_quickbooks_to_db,
-                        "InspeKtor": save_inspektor_to_db,
-                        "Sunoptic": save_sunoptic_to_db,
-                        "Ternio": save_ternio_to_db,
-                        "Novo": save_novo_to_db,
-                        "Chemence": save_chemence_to_db
-                    }
-                    
-                    table_names = {
-                        "Cygnus": "master_cygnus_sales",
-                        "Logiquip": "master_logiquip_sales",
-                        "Summit Medical": "master_summit_medical_sales",
-                        "QuickBooks": "master_quickbooks_sales",
-                        "InspeKtor": "master_inspektor_sales",
-                        "Sunoptic": "master_sunoptic_sales",
-                        "Ternio": "master_ternio_sales",
-                        "Novo": "master_novo_sales",
-                        "Chemence": "master_chemence_sales"
-                    }
-                    
-                    if f_type in save_functions:
-                        debug_output.extend(save_functions[f_type](df_data, table_names[f_type]))
-                        st.success(f"Data from '{f_name}' successfully saved to the '{f_type}' table.")
-                    else:
-                        st.error(f"No save function defined for file type: {f_type}")
-                    
-                except Exception as e:
-                    st.error(f"Error saving '{f_name}' to the database: {e}")
+                    blank_details = check_for_blanks_with_details(df_data, f_type)
+                    if blank_details:
+                        invalid_files[f_name] = blank_details
 
-            # Display debug output
-            if debug_output:
-                st.markdown("### Debug Log")
-                for message in debug_output:
-                    st.markdown(f"- {message}")
-            else:
-                st.info("No debug messages to display.")
+                if invalid_files:
+                    st.error("Some files contain rows with blank values. Please fix them and try again.")
+                    for fname, row_col_details in invalid_files.items():
+                        for row, cols in row_col_details:
+                            st.markdown(f"- **File:** {fname} | **Row:** {row} | **Columns:** {', '.join(cols)}")
+                    return
                 
-        # Only show Cancel button if warning is active
-        if st.session_state.showing_overwrite_warning:
-            if st.button("Cancel", key="cancel_button", use_container_width=True):
+                # If we're not already showing the warning, check for data to overwrite
+                if not st.session_state.showing_overwrite_warning:
+                    overwrite_needed = False
+                    overwrite_messages = []
+                    
+                    for f_name, (df_data, f_type) in st.session_state.dataframes.items():
+                        has_existing, date_info = check_for_existing_data(df_data, f_type)
+                        if has_existing:
+                            overwrite_needed = True
+                            overwrite_messages.append(f"**{f_type}**: {date_info}")
+                    
+                    # If overwrite is needed, show the warning and return without saving
+                    if overwrite_needed:
+                        st.session_state.showing_overwrite_warning = True
+                        st.session_state.overwrite_messages = overwrite_messages
+                        st.rerun()  # Force refresh to show the warning
+                        return  # Return without saving
+                
+                # If we get here, either there's no data to overwrite or the user has confirmed
+                # Proceed with saving all dataframes
+                
+                # Reset the warning state
                 st.session_state.showing_overwrite_warning = False
                 st.session_state.overwrite_messages = []
-                st.success("Operation cancelled. No data was modified.")
-                st.rerun()  # Refresh to remove the warning
+                
+                # Save all the dataframes
+                debug_output = []
+                for f_name, (df_data, f_type) in st.session_state.dataframes.items():
+                    try:
+                        # Dispatch to appropriate save function based on file type
+                        save_functions = {
+                            "Cygnus": save_cygnus_to_db,
+                            "Logiquip": save_logiquip_to_db,
+                            "Summit Medical": save_summit_medical_to_db,
+                            "QuickBooks": save_quickbooks_to_db,
+                            "InspeKtor": save_inspektor_to_db,
+                            "Sunoptic": save_sunoptic_to_db,
+                            "Ternio": save_ternio_to_db,
+                            "Novo": save_novo_to_db,
+                            "Chemence": save_chemence_to_db
+                        }
+                        
+                        table_names = {
+                            "Cygnus": "master_cygnus_sales",
+                            "Logiquip": "master_logiquip_sales",
+                            "Summit Medical": "master_summit_medical_sales",
+                            "QuickBooks": "master_quickbooks_sales",
+                            "InspeKtor": "master_inspektor_sales",
+                            "Sunoptic": "master_sunoptic_sales",
+                            "Ternio": "master_ternio_sales",
+                            "Novo": "master_novo_sales",
+                            "Chemence": "master_chemence_sales"
+                        }
+                        
+                        if f_type in save_functions:
+                            debug_output.extend(save_functions[f_type](df_data, table_names[f_type]))
+                            st.success(f"Data from '{f_name}' successfully saved to the '{f_type}' table.")
+                        else:
+                            st.error(f"No save function defined for file type: {f_type}")
+                        
+                    except Exception as e:
+                        st.error(f"Error saving '{f_name}' to the database: {e}")
+
+                # Display debug output
+                if debug_output:
+                    st.markdown("### Debug Log")
+                    for message in debug_output:
+                        st.markdown(f"- {message}")
+                else:
+                    st.info("No debug messages to display.")
+                    
+            # Only show Cancel button if warning is active
+            if st.session_state.showing_overwrite_warning:
+                if st.button("Cancel", key="cancel_button", use_container_width=True):
+                    st.session_state.showing_overwrite_warning = False
+                    st.session_state.overwrite_messages = []
+                    st.success("Operation cancelled. No data was modified.")
+                    st.rerun()  # Refresh to remove the warning
 
 def data_upload_status_tab():
     st.title("Data Upload Status")
@@ -878,9 +1077,6 @@ def data_upload_status_tab():
     for col in boolean_columns:
         data_status[col] = data_status[col].fillna(False).astype(bool)
     data_status["Product line"] = data_status["Product line"].astype(str)
-    
-    # Sort data_status by "Product line" in alphabetical order
-    data_status = data_status.sort_values(by="Product line", ascending=True).reset_index(drop=True)
 
     edited_data = st.data_editor(
         data_status,

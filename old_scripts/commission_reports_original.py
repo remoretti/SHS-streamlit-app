@@ -15,36 +15,6 @@ def get_db_connection():
     engine = create_engine(DATABASE_URL)
     return engine
 
-##### EDIT FOR CASE SENSITIVE PRODUCT LINE RETRIEVAL
-# EDIT 1: Add this new function after get_db_connection()
-def standardize_product_line_name(product_line):
-    """Standardize product line names to ensure consistent display."""
-    if not product_line:
-        return product_line
-    
-    # Define standardized names for known variations
-    standardized_names = {
-        'logiquip': 'Logiquip',
-        'cygnus': 'Cygnus', 
-        'summit medical': 'Summit Medical',
-        'inspektor': 'InspeKtor',
-        'sunoptic': 'Sunoptic',
-        'ternio': 'Ternio',
-        'novo': 'Novo',
-        'chemence': 'Chemence',
-        'miscellaneous': 'Miscellaneous',
-        'streamlite': 'Streamlite',
-        'surgical instruments': 'Surgical Instruments',
-        'services': 'Services',
-        'mastel surgical': 'Mastel Surgical',
-        'pure processing': 'Pure Processing'
-    }
-    
-    product_line_lower = product_line.lower()
-    return standardized_names.get(product_line_lower, product_line)
-
-#######
-
 def get_unique_sales_reps():
     """Fetch distinct Sales Rep names from the harmonised_table."""
     query = """
@@ -86,38 +56,27 @@ def get_years_for_sales_rep(sales_rep):
     finally:
         engine.dispose()
 
-
-##### EDIT FOR CASE SENSITIVE PRODUCT LINE RETRIEVAL
 def get_unique_product_lines(sales_rep, year):
     """Fetch unique Product Lines from harmonised_table based on Sales Rep and Year.
-    Uses Commission Date YYYY for commission attribution.
-    Groups case-insensitively and returns standardized product line names."""
+    Uses Commission Date YYYY for commission attribution."""
     query = """
-        SELECT LOWER("Product Line") as product_line_lower, 
-               MAX("Product Line") as product_line_display
+        SELECT DISTINCT "Product Line"
         FROM harmonised_table
         WHERE "Sales Rep" = :sales_rep
           AND "Commission Date YYYY" = :year
-        GROUP BY LOWER("Product Line")
-        ORDER BY LOWER("Product Line")
+        ORDER BY "Product Line"
     """
     engine = get_db_connection()
     try:
         with engine.connect() as conn:
             result = conn.execute(text(query), {"sales_rep": sales_rep, "year": year})
-            # Use standardization function to ensure consistent naming
-            product_lines = []
-            for row in result.fetchall():
-                standardized_name = standardize_product_line_name(row[1])  # Use display name but standardize it
-                product_lines.append(standardized_name)
+            product_lines = [row[0] for row in result.fetchall()]
         return product_lines
     except Exception as e:
         st.error(f"Error fetching Product Lines: {e}")
         return []
     finally:
         engine.dispose()
-
-##########
 
 def get_monthly_commission(sales_rep, year, month, product_line):
     """
@@ -148,8 +107,6 @@ def get_monthly_commission(sales_rep, year, month, product_line):
     finally:
         engine.dispose()
 
-
-##### EDIT FOR CASE SENSITIVE PRODUCT LINE RETRIEVAL
 def generate_report(sales_rep, year):
     """
     Generate the commission report for a Sales Rep or all Sales Reps.
@@ -199,13 +156,10 @@ def generate_report(sales_rep, year):
                 product_lines = get_unique_product_lines(rep, year)
                 for product_line in product_lines:
                     
-                    # Standardize the product line key for consistent grouping
-                    standardized_product_line = standardize_product_line_name(product_line)
-                    
-                    # ensure our row exists - use standardized name as key
-                    if standardized_product_line not in final_report_data:
-                        final_report_data[standardized_product_line] = {str(i).zfill(2): 0 for i in range(1, 13)}
-                        final_report_data[standardized_product_line]["Total"] = 0
+                    # ensure our row exists
+                    if product_line not in final_report_data:
+                        final_report_data[product_line] = {str(i).zfill(2): 0 for i in range(1, 13)}
+                        final_report_data[product_line]["Total"] = 0
 
                     # **always** fetch this rep's true threshold**
                     threshold_query = """
@@ -224,10 +178,8 @@ def generate_report(sales_rep, year):
                     threshold = float('inf') if t is None else t
 
                     # if we're in the single-rep view, record it for display
-                    # if sales_rep != "All":
-                    #     final_report_data[product_line]["Comm Tier Threshold"] = threshold
                     if sales_rep != "All":
-                        final_report_data[standardized_product_line]["Comm Tier Threshold"] = threshold
+                        final_report_data[product_line]["Comm Tier Threshold"] = threshold
 
                     # Modify the commission query to also fetch monthly Sales Actual.
                     commission_query = """
@@ -280,9 +232,9 @@ def generate_report(sales_rep, year):
                             # After threshold has been reached, use full tier2 commission.
                             commission_amount = tier1_sum + tier2_sum
 
-                        # Sum the commission for the STANDARDIZED product line for this month.
-                        final_report_data[standardized_product_line][month_str] += commission_amount
-                        final_report_data[standardized_product_line]["Total"] += commission_amount
+                        # Sum the commission for the product line for this month.
+                        final_report_data[product_line][month_str] += commission_amount
+                        final_report_data[product_line]["Total"] += commission_amount
 
     except Exception as e:
         st.error(f"Error generating the report: {e}")
@@ -302,6 +254,32 @@ def generate_report(sales_rep, year):
     }
     report_df.rename(columns=month_mapping, inplace=True)
 
+    # # Ensure numeric columns are numeric.
+    # numeric_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
+    # for col in numeric_columns:
+    #     report_df[col] = pd.to_numeric(report_df[col], errors="coerce").fillna(0)
+
+    # sub_total_values = report_df.drop(columns=["Product Line"]).sum().to_dict()
+    # sub_total_values["Product Line"] = "Sub-total"
+    # report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)
+
+    ### float/DECIMALS error fixed from the code above ###
+    # # Ensure ALL numeric columns are float type to prevent Decimal/float mixing
+    # numeric_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
+    # for col in numeric_columns:
+    #     report_df[col] = pd.to_numeric(report_df[col], errors="coerce").fillna(0).astype(float)
+
+    # # Now sum will work correctly with all float values
+    # sub_total_values = report_df.drop(columns=["Product Line"]).sum().to_dict()
+    # sub_total_values["Product Line"] = "Sub-total"
+    # report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)
+    # ### end of fix ###
+
+    # # Separate the "Sub-total" row and sort the remaining rows by "Product Line" ascending.
+    # subtotal_df = report_df[report_df["Product Line"] == "Sub-total"]
+    # main_df = report_df[report_df["Product Line"] != "Sub-total"].sort_values(by="Product Line", ascending=True)
+    # report_df = pd.concat([main_df, subtotal_df], ignore_index=True)
+    # This approach is more thorough and handles Decimal objects completely
     for col in report_df.columns:
         if col != "Product Line":  # Skip non-numeric columns
             try:
@@ -329,13 +307,7 @@ def generate_report(sales_rep, year):
             sub_total_values[col] = ""  # Non-numeric columns get empty string
     
     # Add the sub-total row
-    report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)
-
-    # ADD this sorting logic:
-    # Separate the "Sub-total" row and sort the remaining rows by "Product Line" alphabetically
-    subtotal_df = report_df[report_df["Product Line"] == "Sub-total"]
-    main_df = report_df[report_df["Product Line"] != "Sub-total"].sort_values(by="Product Line", ascending=True)
-    report_df = pd.concat([main_df, subtotal_df], ignore_index=True)    
+    report_df = pd.concat([report_df, pd.DataFrame([sub_total_values])], ignore_index=True)    
 
     currency_columns = [col for col in report_df.columns if col not in ["Product Line", "Comm Tier Threshold"]]
     for col in currency_columns:
@@ -347,8 +319,6 @@ def generate_report(sales_rep, year):
         )
 
     return report_df
-
-#########
 
 
 def get_years_for_sales_rep_any():

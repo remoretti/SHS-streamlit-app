@@ -169,69 +169,67 @@ def validate_sales_territory_upload(df, sales_rep_names):
     return is_valid, validation_errors
 
 # Initialize session state flags for editing if not already set.
-if "quickbooks_service_editing" not in st.session_state:
-    st.session_state.quickbooks_service_editing = False
-if "general_service_editing" not in st.session_state:
-    st.session_state.general_service_editing = False
+if "service_editing" not in st.session_state:
+    st.session_state.service_editing = False
 if "commission_editing" not in st.session_state:
     st.session_state.commission_editing = False
 if "territory_editing" not in st.session_state:
     st.session_state.territory_editing = False
 
 # Also initialize session state variables to store the loaded file (if any)
-if "loaded_quickbooks_service_df" not in st.session_state:
-    st.session_state.loaded_quickbooks_service_df = None
-if "loaded_general_service_df" not in st.session_state:
-    st.session_state.loaded_general_service_df = None
+if "loaded_service_df" not in st.session_state:
+    st.session_state.loaded_service_df = None
 if "loaded_commission_df" not in st.session_state:
     st.session_state.loaded_commission_df = None
 if "loaded_sales_rep_df" not in st.session_state:
     st.session_state.loaded_sales_rep_df = None
 
-# Streamlit UI: four tabs
-tab1, tab2, tab3, tab4 = st.tabs(["QuickBooks: Service to Product", "General: Service to Product", "Sales Reps", "Sales Territory"])
+# Streamlit UI: three tabs
+tab1, tab2, tab3 = st.tabs(["Service to Product", "Sales Reps", "Sales Territory"])
 
-#############################################
-# Tab 1: QuickBooks Service-to-Product Mapping #
-#############################################
+#####################################
+# Tab 1: Service-to-Product Mapping #
+#####################################
 with tab1:
-    st.header("QuickBooks Service-to-Product Mapping")
+    st.header("Service-to-Product Mapping - QuickBooks")
     
-    if not st.session_state.quickbooks_service_editing:
+    if not st.session_state.service_editing:
         # Preview mode (read-only)
         try:
             df_service_to_product = fetch_table_data("service_to_product")
-            st.subheader("Preview QuickBooks Service-to-Product Data (Read-Only)")
+            st.subheader("Preview Service-to-Product Data (Read-Only)")
 
             # Place the Edit Data button right after the subheader
-            if st.button("Edit Data", key="quickbooks_service_edit_button"):
-                st.session_state.quickbooks_service_editing = True
+            if st.button("Edit Data", key="service_edit_button"):
+                st.session_state.service_editing = True
             st.dataframe(df_service_to_product, use_container_width=True, hide_index=True, height=600)
 
         except Exception as e:
             st.error(f"Error: {e}")
+        # if st.button("Edit Data", key="service_edit_button"):
+        #     st.session_state.service_editing = True
     else:
         # Editing mode
-        st.subheader("Edit QuickBooks Service-to-Product Data")
+        st.subheader("Edit Service-to-Product Data")
         
         # --- Load from File Section ---
         uploaded_file_service = st.file_uploader(
-            "Upload a .xlsx file to load data for QuickBooks Service-to-Product Mapping", 
+            "Upload a .xlsx file to load data for Service-to-Product Mapping", 
             type=["xlsx"],
-            key="quickbooks_service_file_uploader"
+            key="service_file_uploader"
         )
         if uploaded_file_service is not None:
-            if st.button("Load from File", key="quickbooks_service_load_file_button"):
+            if st.button("Load from File", key="service_load_file_button"):
                 try:
                     df_from_file = pd.read_excel(uploaded_file_service)
                     # Instead of updating the DB immediately, store it in session state.
-                    st.session_state.loaded_quickbooks_service_df = df_from_file
+                    st.session_state.loaded_service_df = df_from_file
                     st.success("File loaded successfully. You can now edit the data below.")
                 except Exception as e:
                     st.error(f"Error loading file: {e}")
         
         # Determine which dataframe to show in the editor:
-        base_df = st.session_state.loaded_quickbooks_service_df if st.session_state.loaded_quickbooks_service_df is not None else fetch_table_data("service_to_product")
+        base_df = st.session_state.loaded_service_df if st.session_state.loaded_service_df is not None else fetch_table_data("service_to_product")
         
         # Show the editable table (index hidden via hide_index=True)
         try:
@@ -240,113 +238,42 @@ with tab1:
                 use_container_width=True,
                 num_rows="dynamic",
                 hide_index=True,
-                key="quickbooks_service_to_product_editor",
+                key="service_to_product_editor",
                 height=600
             )
-            if "quickbooks_service_save_initiated" not in st.session_state:
-                st.session_state.quickbooks_service_save_initiated = False
+            if "service_save_initiated" not in st.session_state:
+                st.session_state.service_save_initiated = False
 
-            if st.button("Save Changes", key="quickbooks_service_save_button"):
-                st.session_state.quickbooks_service_save_initiated = True
+            if st.button("Save Changes", key="service_save_button"):
+                st.session_state.service_save_initiated = True
                 st.warning("Are you sure you want to replace the current table with the new data?")
-            
+            # if st.session_state.service_save_initiated:
+            #     if st.button("Yes, Replace Table", key="service_confirm_button"):
+            #         update_table_data("service_to_product", edited_df)
+            #         st.session_state.service_save_initiated = False
+            #         # Clear the loaded file if it was used
+            #         st.session_state.loaded_service_df = None
             ### SAVING WITH STRIPPING GUARDRAILS
-            if st.session_state.quickbooks_service_save_initiated:
-                if st.button("Yes, Replace Table", key="quickbooks_service_confirm_button"):
+            if st.session_state.service_save_initiated:
+                if st.button("Yes, Replace Table", key="service_confirm_button"):
                     # Clean the data before saving
                     edited_df = clean_dataframe(edited_df)
                     update_table_data("service_to_product", edited_df)
-                    st.session_state.quickbooks_service_save_initiated = False
+                    st.session_state.service_save_initiated = False
                     # Clear the loaded file if it was used
-                    st.session_state.loaded_quickbooks_service_df = None
+                    st.session_state.loaded_service_df = None
         except Exception as e:
             st.error(f"Error: {e}")
             
         # Button to cancel editing and return to preview mode
-        if st.button("Cancel Editing", key="quickbooks_service_cancel_button"):
-            st.session_state.quickbooks_service_editing = False
-            st.session_state.loaded_quickbooks_service_df = None  # Clear any loaded file
+        if st.button("Cancel Editing", key="service_cancel_button"):
+            st.session_state.service_editing = False
+            st.session_state.loaded_service_df = None  # Clear any loaded file
 
 ##########################################
-# Tab 2: General Service-to-Product Mapping #
+# Tab 2: Sales Reps Commission Tiers     #
 ##########################################
 with tab2:
-    st.header("General Service-to-Product Mapping")
-    
-    if not st.session_state.general_service_editing:
-        # Preview mode (read-only)
-        try:
-            df_general_service_to_product = fetch_table_data("general_service_to_product")
-            st.subheader("Preview General Service-to-Product Data (Read-Only)")
-
-            # Place the Edit Data button right after the subheader
-            if st.button("Edit Data", key="general_service_edit_button"):
-                st.session_state.general_service_editing = True
-            st.dataframe(df_general_service_to_product, use_container_width=True, hide_index=True, height=600)
-
-        except Exception as e:
-            st.error(f"Error: {e}")
-    else:
-        # Editing mode
-        st.subheader("Edit General Service-to-Product Data")
-        
-        # --- Load from File Section ---
-        uploaded_file_general_service = st.file_uploader(
-            "Upload a .xlsx file to load data for General Service-to-Product Mapping", 
-            type=["xlsx"],
-            key="general_service_file_uploader"
-        )
-        if uploaded_file_general_service is not None:
-            if st.button("Load from File", key="general_service_load_file_button"):
-                try:
-                    df_from_file = pd.read_excel(uploaded_file_general_service)
-                    # Instead of updating the DB immediately, store it in session state.
-                    st.session_state.loaded_general_service_df = df_from_file
-                    st.success("File loaded successfully. You can now edit the data below.")
-                except Exception as e:
-                    st.error(f"Error loading file: {e}")
-        
-        # Determine which dataframe to show in the editor:
-        base_df = st.session_state.loaded_general_service_df if st.session_state.loaded_general_service_df is not None else fetch_table_data("general_service_to_product")
-        
-        # Show the editable table (index hidden via hide_index=True)
-        try:
-            edited_df = st.data_editor(
-                base_df,
-                use_container_width=True,
-                num_rows="dynamic",
-                hide_index=True,
-                key="general_service_to_product_editor",
-                height=600
-            )
-            if "general_service_save_initiated" not in st.session_state:
-                st.session_state.general_service_save_initiated = False
-
-            if st.button("Save Changes", key="general_service_save_button"):
-                st.session_state.general_service_save_initiated = True
-                st.warning("Are you sure you want to replace the current table with the new data?")
-            
-            ### SAVING WITH STRIPPING GUARDRAILS
-            if st.session_state.general_service_save_initiated:
-                if st.button("Yes, Replace Table", key="general_service_confirm_button"):
-                    # Clean the data before saving
-                    edited_df = clean_dataframe(edited_df)
-                    update_table_data("general_service_to_product", edited_df)
-                    st.session_state.general_service_save_initiated = False
-                    # Clear the loaded file if it was used
-                    st.session_state.loaded_general_service_df = None
-        except Exception as e:
-            st.error(f"Error: {e}")
-            
-        # Button to cancel editing and return to preview mode
-        if st.button("Cancel Editing", key="general_service_cancel_button"):
-            st.session_state.general_service_editing = False
-            st.session_state.loaded_general_service_df = None  # Clear any loaded file
-
-##########################################
-# Tab 3: Sales Reps Commission Tiers     #
-##########################################
-with tab3:
     st.header("Sales Reps Commission Tiers")
     
     if not st.session_state.commission_editing:
@@ -451,9 +378,9 @@ with tab3:
             st.session_state.loaded_commission_df = None
 
 #####################################
-# Tab 4: Sales Territory            #
+# Tab 3: Sales Territory            #
 #####################################
-with tab4:
+with tab3:
     st.header("Sales Territory")
     
     if not st.session_state.territory_editing:
